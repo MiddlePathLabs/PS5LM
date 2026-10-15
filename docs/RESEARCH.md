@@ -27,7 +27,13 @@ On top of it: kstuff (fake-signed executables), a HEN (etaHEN or OnionHEN) and [
 - large data goes in direct memory; its own fork of the ps5vk driver offers a 12 GiB device heap with `PS5VK_WIDE_MEMORY` (a PS5SX2 switch, not one of PS5_Vulkan's)
 - JIT and other rights come from the HEN: the app writes `{"PID":n}` to `/download0/etahen_jailbreak`
 
-**[ProsperoAI](https://github.com/blackbearreloaded/ProsperoAI)** (GPL-3.0), LLM chat on the PS5 GPU (September 2026). Runs Qwen3.5 9B Q4_0 (6.37 GiB) at about 30 tok/s decode and Mistral 7B Q4_0 at 25 to 29 tok/s, with a 4,096 token context. It writes AGC kernels by hand for each model (`src/backends/qwen35`, `src/backends/mistral`) from per-model recipes and supports Q4_0 only, so a new model or quant means new kernels. It vendors llama.cpp's CPU libraries built for the PS5. Proof that a 6+ GiB model and fast GPU decode work on this console.
+**[ProsperoAI](https://github.com/blackbearreloaded/ProsperoAI)** (GPL-3.0).
+Its [current README](https://github.com/blackbearreloaded/ProsperoAI/blob/main/README.md)
+reports a shared llama.cpp/GGML Vulkan runtime on RADV; the dedicated AGC inference
+backend has been removed. It reports BoHF 12B MoE 3A Q3_K_M at 68.9 tok/s on a
+base PS5 with short/reused context. These are the external author's measurements,
+not PS5LM results or measurements of this Pro. BoHF is a reproduction candidate;
+model quality and longer-context performance need separate evaluation.
 
 **[PS5_Vulkan](https://github.com/mihawk-99/PS5_Vulkan)** (Mihawk-99, GPL-3.0) builds two Vulkan drivers for the PS5's GPU. The one going forward is RADV, Mesa 26.2's AMD driver, from the author's fork [PS5_Mesa](https://github.com/mihawk-99/PS5_Mesa) with a PS5 winsys over the console's AGC functions. It reports Vulkan 1.4 and compiles shaders with ACO on the console when a pipeline is created. ps5vk, the first driver (Vulkan 1.1), is the one built on the PSBC compiler from the ps5-opengl SDK. vkQuake, RetroArch's Vulkan cores and ProsperoEden run on RADV. For ggml-vulkan it has what is required (Vulkan 1.2 or later, 16-bit storage, timeline semaphores, subgroup operations, fp16, `maxStorageBufferRange` of 4 GiB) but no cooperative matrix and no accelerated integer dot product, so matrix products take the fp16 shaders. A submit that makes no progress for 10 s ends in `VK_ERROR_DEVICE_LOST` (`radv_ps5_winsys.c`). Its measurements are from firmware 6.02 to 12.70, mostly on a PS5 Pro; 13.60 is untested.
 

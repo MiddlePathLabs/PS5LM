@@ -1,0 +1,14 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -2061,4 +2061,10 @@
+             name = aligned ? "flash_attn_f32_f16_aligned" : "flash_attn_f32_f16";
+         } else {
++#if defined(__PROSPERO__)
++            // Native scalar attention with requested F32 accumulation must also
++            // avoid FP16 Q/probability/output intermediates; matmul is unchanged.
++            if (device->fp16 && !f32acc) {
++#else
+             if (device->fp16) {
++#endif
+                 if (device->dot2_f16) {

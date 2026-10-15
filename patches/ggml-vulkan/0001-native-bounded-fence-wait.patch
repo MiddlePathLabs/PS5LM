@@ -1,0 +1,23 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -342,6 +342,19 @@ static VkDeviceSize ggml_vk_get_max_buffer_range(const ggml_backend_vk_context * ct
+ }
+ 
+ void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
++#if defined(__PROSPERO__)
++    // Native titles must sleep rather than spin indefinitely. The native
++    // dispatch guard terminates without unwinding on timeout/device loss.
++    if (ctx->almost_ready_fence_pending) {
++        VK_CHECK(ctx->device->device.waitForFences({ ctx->almost_ready_fence }, true, 2000000000ULL), "almost_ready_fence", ctx->device);
++        ctx->device->device.resetFences({ ctx->almost_ready_fence });
++        ctx->almost_ready_fence_pending = false;
++    }
++    VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, 2000000000ULL), "native_fence", ctx->device);
++    ctx->device->device.resetFences({ ctx->fence });
++    return;
++#endif
++
+     // Use waitForFences while most of the graph executes. Hopefully the CPU can sleep
+     // during this wait.
+     if (ctx->almost_ready_fence_pending) {

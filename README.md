@@ -40,7 +40,7 @@ Earlier PS5 LLM work hand-writes GPU kernels for one model at a time. PS5LM port
 |---|---|
 | `third_party/llama.cpp` | upstream llama.cpp, pinned as a submodule |
 | `ps5/compat` | the few libc functions the console lacks |
-| `patches/` | PS5 changes to llama.cpp's source, kept small |
+| `patches/` | Small llama.cpp changes at the root; native RADV build patches in `patches/native/` |
 | `probes/` | `memprobe` and `threadprobe`: what a payload gets on the console |
 | `scripts/` | SDK setup, the llama.cpp cross build, sending payloads |
 | `docs/` | [roadmap](docs/ROADMAP.md), [models that fit](docs/MODELS.md), [porting notes](docs/PORTING.md), [research](docs/RESEARCH.md) |

@@ -75,17 +75,82 @@ An Ollama-like way to get models and chat, without a PC in the loop. One payload
 
 ## Phase 3: the GPU through Vulkan
 
-The route: ggml's Vulkan backend on [Mihawk-99's PS5_Vulkan](https://github.com/mihawk-99/PS5_Vulkan), whose RADV driver (Mesa 26.2 from [PS5_Mesa](https://github.com/mihawk-99/PS5_Mesa), on a PS5 winsys over the console's AGC functions) reports Vulkan 1.4 and compiles shaders with ACO on the console. llama.cpp keeps its own kernels, so every model and quant comes along. RADV has everything ggml-vulkan requires but no cooperative matrix and no accelerated integer dot product, so matrix products take the fp16 shaders ([RESEARCH.md](RESEARCH.md)).
+The route is ggml's Vulkan backend on [PS5_Vulkan](https://github.com/mihawk-99/PS5_Vulkan)
+and [PS5_Mesa](https://github.com/mihawk-99/PS5_Mesa). On the current Pro, a tiny
+native RADV dispatch and five bounded FP32 ggml operator cases passed with clean
+native closure. Full model compatibility, residency and inference performance
+remain unverified. The target is a small resident dense model first, then a
+smaller fully resident MoE, not the earlier 27B/performance targets.
 
-- [ ] Build RADV: `tools/setup-native-dependencies.sh`, then `tools/build-radv.sh release` in PS5_Vulkan (CachyOS or Arch is the tested host; an Arch machine in OrbStack avoids an untested Ubuntu). Output: `libvulkan_radeon.ps5.a`
-- [ ] App shell: `eboot.bin` with `sce_sys/param.json`, from [ps5-native-app-boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate), mounted by ShadowMountPlus, jailbroken at start through the HEN request PS5SX2 uses (the title ID must be on etaHEN's allowlist)
-- [ ] ggml-vulkan cross-compiled, its shaders compiled to SPIR-V on the host, linked as `tools/radv-link.sh` does (`--whole-archive`, `--defsym` for the `vk*` entry points ggml calls directly)
-- [ ] `test-backend-ops` on the console: every op the `qwen35` graph uses matches the CPU
-- [ ] Prompt processing in small batches: a submit that makes no progress for 10 s loses the device, and Gated DeltaNet loops over every token of a batch in one dispatch
-- [ ] Weights in device memory. RADV's heaps come out of one direct memory pool of about 12 GiB, shared with the CPU side, so UD-IQ2_XXS (6.77 GiB) before UD-Q2_K_XL
-- [ ] Qwen3.8-27B decoding on the GPU, target 15 tok/s or more
+- [x] Build RADV locally on Mac with `scripts/build-native-radv.sh`; pinned archive/provenance in [PORTING.md](PORTING.md).
+- [x] Native app shell with standalone Kstuff Lite / ShadowMountPlus, no etaHEN; PPSA99040 queries and clean close passed.
+- [x] PPSA99041 tiny GPU test: all 64 integer outputs correct, fence and cleanup complete, clean shell-managed closure. Evidence in [CONSOLE.md](CONSOLE.md).
+- [x] ggml-vulkan and libllama cross-compiled from the pinned source export; 1,567 host-generated SPIR-V modules validated and the bounded native package linked with audited imports.
+- [ ] Bounded `test-backend-ops` coverage for the selected dense and MoE graphs matches the CPU.
+  - Initial five FP32 cases (`ADD`, `MUL`, `RMS_NORM`, `MUL_MAT`, `MUL_MAT_ID`) passed on the native GPU: 320 outputs, zero mismatches, independently observed clean closure.
+  - Expanded suite: Q4_K matvec/matmul/MoE and Q6_K matmul passed all 200 outputs. Mixed-precision attention decode failed one of 128 outputs; prefill was not run. Clean native closure passed.
+  - Attention diagnostic captured all 128 values and `fp16_f32acc` tuning. Fused-FP16 host emulation reproduces every GPU output exactly, attributing this case's mismatch to mixed-precision arithmetic.
+  - Controlled FP32 scalar decode comparison passed on hardware: identical FP16 cache values, CPU reference and dispatch tuning, unchanged tolerance, zero mismatches, maximum error `1.49011612e-7`, clean native closure.
+  - Attention-scoped FP32 causal prefill passed on hardware: four queries, all 512 outputs checked, zero mismatches, maximum error `1.49011612e-7`, actual `fp32` shader with `device_fp16=true`, clean closure and services responsive. Targeted tiny operators pass; full selected-model coverage and resident-model validation remain open. Reuse upstream app/server work while retaining the audited runtime.
+- [x] `scripts/ps5-native-test.sh`: deploy, launch and watch a native title from the Mac, so a GPU test needs no Play by hand ([MAC_DEV_LOOP.md](MAC_DEV_LOOP.md#native-titles)). Verified on the console 2026-10-15.
+- [ ] Conservative prompt batches and bounded GPU submissions; record completion/timeouts before increasing load.
+- [x] Establish model, context and scratch residency with a small dense model. Qwen3.5 0.8B Q4_K_M ran on the GPU with an explicit 1.5 GiB budget (peak 1085 MiB) and matched the CPU reference: 22 identical greedy tokens, then a near tie. The LM head stays on the CPU because of RADV's storage-buffer range ([CONSOLE.md](CONSOLE.md)). The reported 12 GiB direct budget is still not a validated safe allocation limit.
+- [ ] Run the LM head on the GPU: split large matmuls under `maxStorageBufferRange` (ggml-vk has a split path for mat-vec) or use 64-bit indexing if RADV offers it.
+- [ ] Run a smaller fully resident MoE after the dense baseline; SSD expert streaming remains deferred.
+- [ ] Record repeatable prompt-processing and generation benchmarks without extrapolating external results.
 
-**Done when** the GPU decodes at least five times faster than the CPU.
+**Done when** selected resident models produce correct output through the LAN API and repeatable local benchmarks are recorded.
+
+### Next on the GPU: a plan, not yet run (2026-10-15)
+
+Nothing below has been downloaded, uploaded or run. Each step is one bounded
+`ps5-native-test.sh` run, read before the next, as the dense baseline was.
+
+**0. LM head on the GPU first.** The dense baseline leaves its 198.93 MiB output
+matrix on the CPU because RADV reports a smaller `maxStorageBufferRange`. Log
+that limit, then either let ggml-vk split matrices above it (it already splits
+mat-vec rows at `ggml-vulkan.cpp` `needs_split`; `supports_op` would need to
+allow it) as a patch in `patches/ggml-vulkan/`, or use 64-bit indexing if this
+RADV offers it. Pass: the same Qwen3.5 0.8B test with 2 graph splits and the
+same token rule. Any MoE or larger dense model has the same problem, since
+their output and embedding matrices are bigger still.
+
+**1. Smaller fully resident MoE.** Candidate: IBM Granite 3.1 1B-A400M Instruct
+(`granitemoe`, 32 experts, 8 active, plain attention, 49,155-token vocabulary,
+so its output matrix fits the storage range).
+`bartowski/granite-3.1-1b-a400m-instruct-GGUF` at
+`940d2e1f9f65330615c7c8e980e6c5ac73d3360c`,
+`granite-3.1-1b-a400m-instruct-Q4_K_M.gguf`, 821,847,360 bytes, LFS SHA-256
+`3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb`.
+Step up afterwards: the 3B-A800M Q4_K_M at
+`be9a36f042806cb586bc65556c527079782b78e0`, 2,016,888,384 bytes,
+`48e0edcd578fd4462f26127f04c651d0e650741110185297741089aea01a82b3`
+(just under the 2 GiB per-file limit used so far). Before any run: a bounded
+`MUL_MAT_ID` check at its real expert shapes and types (the passed Q4_K MoE
+case used 2 experts, K=256), a host CPU reference with the same pass rule, and
+a written budget like the dense one (weights ~0.8 GiB, context ≤ 384 MiB,
+total ≤ 2 GiB). Upload with `scripts/ps5-put-file.py`. One model per launch:
+the `abhi245y/PS5LM` fork reports ~5 GiB of GPU memory held after an in-app
+unload, so never unload and reload within a run.
+
+**2. LAN API.** Port upstream's `llama_server()` integration (`ps5/app/main.cpp`
+in `cobanov/PS5LM`) into a new build mode of PPSA99041, not its build: keep our
+native imports, close path, ledger, watchdog-free serving loop with an explicit
+`/quit` that calls `sceShellCoreUtilExitApp`, and the closed environment.
+Needs: `compat_app.c`'s socket/resolver pieces that the server really imports
+(checked by the validator, no wildcard stubs), a bind on the LAN address only,
+and the fork's `0005-listener-survives-network-drops.patch` (plus `0004` for
+Anthropic-style system messages) moved into `patches/` after review. A server
+outlives the 300 s watchdog, so this mode needs a different liveness rule
+(health endpoint plus a bounded idle shutdown) written down before the first run.
+
+**3. Benchmarks.** In the title, not over the network first: fixed prompts of
+128 and 512 tokens and 64 generated tokens, three repeats after one warm-up,
+greedy, reporting prompt and generation tok/s with min/median/max and the memory
+peaks, in one `PS5LM_COMPUTE_RESULT`. Then the same through the LAN API from the
+Mac. Compare only like with like (same model file, context, batch, threads), and
+never extrapolate other consoles' numbers (upstream's 9–21 tok/s 27B result,
+the fork's 124 tok/s on a Slim) to this Pro.
 
 ## Phase 4: the app
 

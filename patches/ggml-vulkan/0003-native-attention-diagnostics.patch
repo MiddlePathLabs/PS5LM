@@ -1,0 +1,41 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -2075,3 +2075,21 @@
+             name = aligned ? "flash_attn_f32_f16_aligned" : "flash_attn_f32_f16";
+         }
++#if defined(__PROSPERO__)
++        if (getenv("GGML_VK_PS5_ATTN_DIAGNOSTICS")) {
++            const char *variant = "other";
++            if (spv_data == flash_attn_f32_f16_fp32_data) variant = "fp32";
++            else if (spv_data == flash_attn_f32_f16_data) variant = "fp16_f32acc";
++            else if (spv_data == flash_attn_f32_f16_f16acc_data) variant = "fp16_f16acc";
++            else if (spv_data == flash_attn_f32_f16_dot2_data) variant = "fp16_dot2_f32acc";
++            else if (spv_data == flash_attn_f32_f16_dot2_f16acc_data) variant = "fp16_dot2_f16acc";
++            GGML_LOG_INFO("PS5LM_ATTN_PIPELINE {\"variant\":\"%s\",\"spv_bytes\":%zu,"
++                          "\"Br\":%u,\"Bc\":%u,\"d_split\":%u,\"row_split\":%u,"
++                          "\"workgroup_size\":%u,\"subgroup_size\":%u,\"aligned\":%s,"
++                          "\"f32acc\":%s,\"device_fp16\":%s,\"dot2\":%s,\"flags\":%u}\n",
++                          variant, spv_size, Br, Bc, fa.first.D_split, fa.first.row_split,
++                          fa.first.workgroup_size, fa_sgs, aligned ? "true" : "false",
++                          f32acc ? "true" : "false", device->fp16 ? "true" : "false",
++                          device->dot2_f16 ? "true" : "false", fa.first.flags);
++        }
++#endif
+         ggml_vk_create_pipeline(device, fa.second, name, spv_size, spv_data, "main", 8,
+@@ -8445,3 +8463,15 @@
+                                               gqa_ratio, split_kv, split_k };
+ 
++#if defined(__PROSPERO__)
++    if (getenv("GGML_VK_PS5_ATTN_DIAGNOSTICS")) {
++        GGML_LOG_INFO("PS5LM_ATTN_DISPATCH {\"q_tokens\":%u,\"q_heads\":%u,"
++                      "\"kv_tokens\":%u,\"gqa_ratio\":%u,\"split_k\":%u,"
++                      "\"split_kv\":%u,\"path\":%u,\"Br\":%u,\"Bc\":%u,"
++                      "\"f32acc\":%s,\"scale\":%.9g,\"mask\":%s}\n",
++                      (uint32_t)neq1, (uint32_t)neq2, KV, gqa_ratio, split_k, split_kv,
++                      (uint32_t)tuning_params.path, Br, Bc, f32acc ? "true" : "false",
++                      scale, mask ? "true" : "false");
++    }
++#endif
++
+     if (xe_fa_opt && split_k > 1) {

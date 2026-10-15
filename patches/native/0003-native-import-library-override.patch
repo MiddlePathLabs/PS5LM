@@ -1,0 +1,39 @@
+--- a/native_app_builder.cpp
++++ b/native_app_builder.cpp
+@@ -256,6 +256,26 @@
+     }
+     if (stubs.empty())
+         throw std::runtime_error("link requires at least one --stub");
++    // A native module can export libraries with names different from its SONAME.
++    // This converter supports one import library per module; make it explicit.
++    for (std::string_view value : options(args, "--stub-library"))
++    {
++        const auto separator = value.find('=');
++        if (separator == std::string_view::npos || separator == 0 || separator + 1 == value.size())
++            throw std::runtime_error("--stub-library requires module=library");
++        const auto module = value.substr(0, separator);
++        const auto library = value.substr(separator + 1);
++        bool found = false;
++        for (auto &stub : stubs)
++        {
++            if (stub.module_name != module)
++                continue;
++            stub.library_name = library;
++            found = true;
++        }
++        if (!found)
++            throw std::runtime_error("--stub-library names an unknown module");
++    }
+ 
+     ps5::module::Options link_options;
+     if (const auto value = option(args, "--file-name"))
+@@ -282,7 +302,8 @@
+               << "  ps5-native-tool self --extract --file <fself> --out <elf>\n"
+               << "  ps5-native-tool self --inspect --file <module>\n"
+               << "  ps5-native-tool link --in <llvm-pie> --out <ps5-elf>"
+-                 " (--stub <sdk-so>... | --stub-dir <sdk-lib>)\n";
++                 " (--stub <sdk-so>... | --stub-dir <sdk-lib>)"
++                 " [--stub-library module=library]...\n";
+ }
+ 
+ } // namespace

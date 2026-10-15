@@ -1,6 +1,183 @@
 # Console facts
 
-Measured on the project's test console. Payload numbers come from `probes/memprobe` and `probes/threadprobe`, run through shsrv.
+Unless explicitly labeled **Pro** below, these are historical measurements from
+the earlier Slim, not the current test target. Payload ceiling/freezing results
+remain cautionary evidence, not a validated safe budget for the Pro.
+
+## Current Pro discovery and native capabilities (2026-10-14–15)
+
+- CFI-7019 B01X, firmware 12.70 (`0x12700001`), host `192.168.1.50`.
+- Payload Manager 0.5.2 on 8084; FTP 2121; kernel logs 3232.
+- `hello` and bounded `discovery` passed on hardware. Discovery reported affinity
+  `0xea00`, 16 CPUs online, zero direct-memory budget, and 8 GiB configured /
+  approximately 7.97 GiB available flexible memory.
+- Only an 8 MiB allocation/touch/verify/free test was exercised. The flexible
+  pool is shared; its reported availability is not an allocation recommendation.
+- A native RADV dispatch over 64 integers and clean shell-managed closure passed.
+  SSD bandwidth, model residency and inference performance have **not** been
+  measured on this Pro. Native budgets remain queries, not safe allocation limits.
+- Evidence: `test-results/ps5/hello/20261014-213555/` and
+  `test-results/ps5/discovery/20261014-213630/` (local, ignored).
+- On 2026-10-15, pinned Kstuff Lite v1.11 / ShadowMountPlus 1.7-beta5fix1
+  registered PPSA99040. Its first native launch (PID 132) crashed with SIGSEGV
+  at RIP zero before any capabilities result; no native budgets were obtained.
+  Logs: `test-results/ps5/native-launch/20261015-090646/`.
+- The repaired PPSA99040 retry (PID 135) reported success: 12 GiB direct memory,
+  448 MiB configured / 442 MiB available flexible memory, CPU affinity `0x1fff`
+  (13 logical CPUs allowed), 16 CPUs online, CPU model `100-000000735`.
+  No test buffers were allocated; reported memory is not a safe allocation limit.
+  An `exit(0)` call was followed by SIGSYS (12) at `libkernel` + `0x3ac`;
+  the process terminated through crash handling, not a verified clean exit.
+  Retry logs/results: `test-results/ps5/native-capabilities-retry/20261015-124122/`.
+- The shell-exit retry (PID 138) repeated the successful budget queries and was
+  removed by ShellCore (`Kill for LoadExec => 0`) without an observed target crash.
+  The shell then tried to execute path `exit`; replacement PID 139 failed with
+  `0x80aa001a` / `EINVAL` and SIGSYS (12). Both PIDs were absent afterward and
+  loader services remained responsive. This is **not** a clean lifecycle pass.
+  Evidence: `test-results/ps5/native-capabilities-shell-exit/20261015-135534/`.
+- Read-only inspection of this console's SystemService module identified the
+  no-argument `sceShellCoreUtilExitApp` close wrapper and its separate
+  `libSceShellCoreUtil` export library. The direct-close launch passed as PID 140:
+  query result success, close API return zero, PID-specific shell exit and process
+  removal, app unload and runtime-mount release. No abort, crash or exit-spawn
+  failure was observed in the captured run; console services answered afterward.
+  This satisfies the native capabilities/clean-close gate, not GPU correctness.
+  Evidence: `test-results/ps5/native-capabilities-direct-close/20261015-141650/`.
+- PPSA99041 (**PS5LM Native Compute**) was separately authorized for one tiny GPU
+  test, staged with raw readback verification and registered through the existing
+  loader. Its first launch (PID 141) failed at `runtime_setup` (`rc=2`) before any
+  Vulkan submission or output verification; no GPU computation was observed.
+  Tracked startup direct-memory peak was 18 MiB, with no denials/ledger errors.
+  The title closed cleanly through the shell, with runtime mounts released and
+  services responsive. The output file was absent, but loader logs confirm the
+  sandbox `/data` mapping existed.
+  Evidence: `test-results/ps5/native-compute/20261015-144615/`.
+  The diagnostic retry (PID 142) identified `lstat("/data/PS5LM")` returning
+  `-1` / `EPERM` (errno 1). It again stopped before Vulkan submission and
+  closed cleanly, with no observed abort/crash and services answering afterward.
+  The native ABI/policy reason for that rejection is not yet established.
+  Evidence: `test-results/ps5/native-compute-setup-diagnostics/20261015-145941/`.
+  Read-only firmware inspection confirmed the expected lstat binding and syscall
+  190. A setup-only no-follow open/fstat/close repair passed local build and 14
+  host filesystem/error smokes. The repaired launch passed as PID 143: runtime
+  setup succeeded, the Vulkan fence completed, all 64 outputs matched and
+  application cleanup completed. No later ABORT or crash was observed; native
+  closure, process removal and runtime-mount release passed.
+  The buffer allocation was 256 bytes (host-coherent memory type 5), with tracked
+  direct-memory peak 36.5 MiB and zero denials/ledger errors. Reported total time
+  was 73.892 ms for this one tiny dispatch, not an inference benchmark.
+  Driver output warned of invalid PCI bus info used for device UUID generation.
+  Services answered afterward; no larger-memory or timeout-recovery claim follows.
+  Evidence: `test-results/ps5/native-compute-metadata/20261015-160502/`.
+- The native llama/ggml-vulkan integration now builds locally. Its bounded
+  five-case FP32 operator executable replaced PPSA99041's integer probe using
+  staged/raw-verified deployment; the old executable is preserved locally.
+  Metadata, runtime, registration and loader instances are unchanged.
+  Local validation covered 277 native imports, 1,567 SPIR-V modules and 320 CPU
+  values checked against scalar formulas. The user-selected native run then
+  **passed all five FP32 operators on the GPU**, PID 144 / app ID `0xe018`:
+  320/320 outputs within tolerance, zero mismatches. Maximum absolute error
+  across the cases was `2.68220901e-7`. Fence/explicit backend cleanup completed;
+  static direct-memory peak was 45.875 MiB, with zero denials/ledger errors.
+  The 45.625 MiB live charge at the marker is not total residency/leak evidence.
+  Whole-run time was 819.647 ms, including CPU references, not inference speed.
+  Native close returned zero; PID-specific shell exit/removal, EndAppMount and
+  loader runtime release passed. PID 144 was absent afterward; no later ABORT,
+  fatal signal, crash-report start or replacement-spawn failure was observed.
+  Services answered and local log capture was stopped.
+  Evidence: `test-results/ps5/native-ggml-ops/20261015-175624/result.json`.
+  Quantized operators, attention and full model graphs remain unverified.
+  The model directory was rechecked: only the 1,280,835,840-byte incomplete
+  `Qwen3.5-2B-Q4_K_M.gguf.part` and its `.pieces` file were present.
+- The expanded PPSA99041 suite **failed its numerical gate but closed cleanly**,
+  PID 145 / app ID `0x18`. Q4_K matvec/matmul, Q6_K matmul and Q4_K two-expert
+  selection passed all 200 outputs (maximum absolute error `1.90734863e-6`).
+  ATTN_DECODE checked 128 outputs and had one mismatch, first at index 77;
+  its case-wide maximum absolute error was `0.000507116318`. ATTN_PREFILL
+  was not run because the suite stopped on failure. The reported total was
+  328 checked values, one mismatch, rc=6; this is not an 840-value pass.
+  Fence and explicit cleanup completed, tracked direct-memory peak 38.875 MiB,
+  zero allocation denials/ledger errors. Native close returned zero and
+  PID-specific shell exit/removal, EndAppMount and runtime release passed.
+  Services answered, the title was unmounted, and local capture was stopped.
+  Evidence: `test-results/ps5/native-ggml-quant-attn/20261015-181614/result.json`.
+  Source inspection found FP16 intermediates remain in scalar Vulkan attention
+  despite requested FP32 accumulation. Their role in the mismatch is a hypothesis,
+  not proven attribution to llama.cpp or RADV; exact failing values were not logged.
+  Tolerances and deployed code are unchanged; no rerun or model upload occurred.
+- The attention-only diagnostic ran as PID 146 / app ID `0x2018`, recorded all
+  128 exact CPU/GPU float values, and repeated the one numerical mismatch.
+  At index 77 the reference was 0.3407879173755646, GPU 0.34033203125;
+  error 0.0004558861255645752 exceeded allowance 0.00044078791737556456.
+  Captured variant `fp16_f32acc`, Br=2/Bc=32, D_split=8, workgroup 128,
+  subgroup 32, GQA=2, split_k=1, scalar path. Host emulation with fused FP16
+  intermediate arithmetic reproduced every GPU output exactly; all 128 were
+  FP16-representable. Tolerance is unchanged. This identifies mixed-precision
+  rounding for this case, not evidence of arbitrary driver corruption.
+  Native close/process removal/mount release passed; services answered. The user
+  confirmed the temporary black screen cleared. Capture was stopped.
+  Tracked direct-memory peak 36.625 MiB; zero allocation denials/ledger errors.
+  Evidence: `test-results/ps5/native-ggml-attn-diagnostic/20261015-183433/result.json`.
+  Next is a separate full-FP32 scalar comparison with the same FP16 cache data;
+  no upstream merge or model execution has occurred.
+- The separate full-FP32 scalar attention comparison **passed on hardware**,
+  PID 147 / app ID `0x4018`: actual variant `fp32`, SPIR-V size 82,152,
+  all 128 outputs within unchanged tolerance, zero mismatches; maximum
+  absolute error `1.4901161193847656e-7`. CPU reference bits, dispatch tuning
+  and FP16 K/V cache data are unchanged from the mixed-precision diagnostic.
+  At index 77 the GPU is now 0.3407878279685974 versus reference
+  0.3407879173755646, error `8.940696716308594e-8`.
+  Fence/explicit cleanup and independent native process/mount release passed.
+  Services answered; log capture stopped. Tracked peak 36.625 MiB, zero
+  denials/ledger errors. Whole-run diagnostic time 9.744221 s is not throughput.
+  Evidence: `test-results/ps5/native-ggml-attn-fp32/20261015-184307/result.json`.
+  The global disable-F16 switch is a controlled comparison, not yet a validated
+  model-wide precision/performance policy. Prefill and full models remain unproven.
+- The attention-scoped causal-prefill workload **passed**, PID 148 / app ID
+  `0x6018`: four queries, two Q heads / one KV head, 32 cached tokens,
+  all 512 outputs within unchanged tolerance, zero mismatches, maximum absolute
+  error `1.49011612e-7`. Actual shader `fp32`, device_fp16=true, GQA ratio 2,
+  split_k=1, mask enabled: FP32 scalar attention selection works without
+  globally disabling FP16 paths. This is not a new matmul performance result.
+  Fence/explicit cleanup and independent native closure/mount release passed.
+  Tracked peak 36.625 MiB, zero allocation denials/ledger errors. All services
+  answered afterward; capture stopped. Reported total 888.960 ms is correctness
+  timing, including CPU reference work, not inference throughput.
+  Evidence: `test-results/ps5/native-ggml-prefill-scoped-fp32/20261015-185248/result.json`.
+  Full model graphs, residency/allocation policy and model execution are still
+  unverified; these small operator checks do not establish a model memory budget.
+- `scripts/ps5-native-test.sh` launched PPSA99041 itself for the first time
+  (PID 150, app ID `0x8018`): the launcher started it in 0.7 s, the prefill
+  workload passed 512/512 again and the title closed and unmounted.
+  Evidence: `test-results/ps5/PPSA99041/20261015-190216/`.
+- **First model on the GPU** (Qwen3.5 0.8B Q4_K_M, pinned in
+  [PORTING.md](PORTING.md#dense-model-baseline-decisions-pin-and-budget)).
+  Run 1 (PID 152): the 300 s watchdog fired while llama.cpp was still creating
+  tensors; unbuffered writes to `/data` from the title cost tens of milliseconds
+  each and its debug log is thousands of lines. Closed cleanly.
+  `test-results/ps5/PPSA99041/20261015-192544/`.
+  Run 2 (PID 154): loaded in 0.81 s, then stopped itself at the context budget
+  (271 MiB against a 256 MiB cap). Closed cleanly.
+  `test-results/ps5/PPSA99041/20261015-193419/`.
+  Run 3 (PID 156) **passed**: 32 greedy tokens, the first 22 identical to the CPU
+  reference; the first difference is at a near tie (CPU top-two gap 0.244).
+  Text: "A GPU (Graphics Processing Unit) is specialized hardware designed to
+  perform parallel calculations, such as rendering 3D graphics, playing video
+  games, or processing massive datasets". No NaN or repetition. All 24 layers and
+  the output norm on the GPU (`Vulkan0` 298.47 MiB); the tied LM head (198.93 MiB
+  Q6_K) stays in pinned host memory and runs on the CPU, because RADV here
+  reports a `maxStorageBufferRange` below that tensor's size (3 graph splits).
+  Memory: wrapped direct memory peaked at 1085 MiB (cap 1536), the model load
+  added 764 MiB, the context 271 MiB (198 MiB of it llama's graph-scheduler
+  bookkeeping), Vulkan memory peaked at 565 MiB and was all freed. Load 0.82 s;
+  prompt 26 tokens at 69 tok/s; generation 7.2 tok/s with the LM head on two CPU
+  threads. One run, not a benchmark. Closed and unmounted, no signal or abort.
+  `test-results/ps5/PPSA99041/20261015-193802/`.
+  An unchanged repeat (PID 158) gave the same 32 tokens and the same memory
+  figures, and closed cleanly: `test-results/ps5/PPSA99041/20261015-194035/`.
+
+The remaining sections describe the earlier Slim. Payload numbers came from
+`probes/memprobe` and `probes/threadprobe`, run through shsrv.
 
 ## Setup
 

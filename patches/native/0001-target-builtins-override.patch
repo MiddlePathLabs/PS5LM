@@ -1,0 +1,11 @@
+--- a/tools/radv-link.sh
++++ b/tools/radv-link.sh
+@@ -22,7 +22,7 @@
+     local compiler=${PS5_CLANG:-$(command -v clang || command -v clang-18 || true)}
+     [[ -n $compiler ]] || { echo "clang was not found; set PS5_CLANG" >&2; return 2; }
+     local builtins
+-    builtins="$("$compiler" --print-resource-dir)/lib/linux/libclang_rt.builtins-x86_64.a"
++    builtins="${RADV_BUILTINS:-$("$compiler" --print-resource-dir)/lib/linux/libclang_rt.builtins-x86_64.a}"
+     local platform="$sdk_root/target/lib/libps5platform.a"
+ 
+     radv_linker_script=(-T "$root/tooling/psbc/ps5-pie-unwind.ld" -L "$root/tooling/native")
