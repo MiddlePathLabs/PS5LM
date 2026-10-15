@@ -77,6 +77,8 @@ scripts/send.sh probes/memprobe/memprobe.elf
 
 The probe streams its results back and also writes them to `/data/PS5LM/memprobe.txt` on the console.
 
+To build, run and check a test payload in one step (through Payload Manager, ftpsrv and klogsrv), see [docs/MAC_DEV_LOOP.md](docs/MAC_DEV_LOOP.md): `scripts/ps5-test.sh hello`.
+
 With [ftpsrv](https://github.com/ps5-payload-dev/ftpsrv) running too (port 2121), `scripts/run.sh` uploads a llama.cpp tool and starts it with arguments:
 
 ```sh

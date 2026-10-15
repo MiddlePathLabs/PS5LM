@@ -13,3 +13,6 @@ models/
 
 .DS_Store
 .wrangler/
+
+# ps5-test.sh runs
+test-results/
