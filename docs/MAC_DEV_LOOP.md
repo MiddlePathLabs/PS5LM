@@ -75,6 +75,32 @@ Put it in `probes/mybench/` with a Makefile that builds `mybench.elf` (copy `pro
 
 `probes/hello` has four fixtures, one for each outcome the wrapper handles: `hello` (pass), `hello-fail`, `hello-crash` and `hello-hang`. After changing `ps5-test.sh`, run all four and check the exit codes are 0, 1, 2 and 5 (`-t 5` for the hang).
 
+## Native titles
+
+The GPU tests are native titles, not payloads: PPSA99040 (capabilities) and PPSA99041 (compute), registered through ShadowMountPlus from `/data/PS5LM/native/` ([PORTING.md](PORTING.md)). `scripts/ps5-native-test.sh` runs one cycle of them from the Mac, as `ps5-test.sh` does for payloads:
+
+```sh
+scripts/build-native-compute.sh ggml-ops                     # build and check first, as before
+scripts/ps5-native-test.sh -d build/native-ggml-ops/PPSA99041 -o native-ggml-ops.out PPSA99041
+scripts/ps5-native-test.sh PPSA99041                          # launch what is already deployed
+```
+
+1. Builds `probes/launch/launch-TITLE.elf`, the launcher payload.
+2. Checks Payload Manager, FTP, the kernel log and ShadowMountPlus (10101), that the title is registered (`/api/v1/games/info`, read only) and that it is not still mounted from an earlier run.
+3. Starts reading the kernel log.
+4. With `-d APPDIR`, replaces `/data/PS5LM/native/TITLE/eboot.bin` and reads it back raw to compare checksums. Nothing else in the title folder changes.
+5. Starts the launcher through Payload Manager. It refuses if any application is open, calls `sceLncUtilLaunchApp` (the calls and fallbacks are the ones Mihawk-99's `ps5vkctl` uses) and exits once the console reports the title running.
+6. Watches for the title's pid, its `PS5LM_*_RESULT` or `PS5LM_*_ABORT` line, a crash signal, and the console closing it (`ProcessTerm()` for the title, then `EndAppMount` returning). The title closes itself; the script never closes or kills it.
+7. Writes `result.json` in `test-results/ps5/TITLE/<time>/`, with the launcher's report, the title's result line and ShadowMountPlus's record before and after. With `-o FILE`, fetches `/data/PS5LM/tests/FILE` too.
+
+Exit codes are `ps5-test.sh`'s, with these differences: 4 also covers a launch that failed, 5 means the title is **still running**, 6 also covers an application already open, and 7 (`not_closed`) means the title reported but did not close within 60 s. 5 and 7 need a person at the console. The default timeout is 180 s.
+
+Building stays a separate step. ShadowMountPlus has no launch call ([api.md](https://github.com/drakmor/ShadowMountPlus/blob/1.7-beta5fix1/docs/api.md)), which is why the launch goes through a payload.
+
+**Verified on the console** on 2026-10-15 (`test-results/ps5/PPSA99041/20261015-190216/`), and used for the first model runs since. A model workload needs `-t 600`; see [PORTING.md](PORTING.md#dense-model-baseline-decisions-pin-and-budget). The script reads the kernel log with `klog_has`, never `grep -q`: under `pipefail` an early-exiting grep made `tail` die of SIGPIPE and the result line looked missing.
+
+An agent may run it on an already-registered title, one run at a time (`AGENTS.md`). The risk does not change: a GPU hang can stop the console answering, and only a person can recover it. What changes is that nobody may be watching, so a hang, a title that does not close or `VK_ERROR_DEVICE_LOST` ends the session until the user is back. Registering new titles, ShadowMountPlus configuration and model loads stay with the user.
+
 ## Common failures
 
 - **Exit 4, Payload Manager not answering:** the console is off, in rest mode, or was rebooted without the jailbreak. `ping` still answers in that state. Jailbreak again and start Payload Manager.
