@@ -2291,6 +2291,51 @@ peak 6277 MiB; stop to freed 1.5 s. **Open:** the one stall is not reproduced (1
 after it); it looks like upstream's "stops answering, waiting on the GPU" but no Vulkan wait
 was involved here. `/ps5lm/stats` is now polled during benchmarks to catch the next one.
 
+#### Qwen3.8 27B UD-IQ2_XXS: new step 9216 MiB (written before its first load)
+
+| File | Repo @ revision | Bytes | SHA-256 |
+|---|---|---|---|
+| `Qwen3.8-27B-UD-IQ2_XXS.gguf` | `unsloth/Qwen3.8-27B-GGUF` @ `4ca720788d1e01f1bff70c033e0d0028fd02e502` | 7,266,070,528 | `e792d8fb3142fe6d9171876d6da0f71f05a71028718debc72dbec93ff645e67d` |
+
+SHA-256 equal to the Hub's LFS id (the roadmap's file). `qwen35`, 64 layers (KV in 16),
+hidden 5120, FFN 17408, 24 Q / 4 KV heads of 256; untied: `output.weight` Q3_K 521.0 MiB,
+`token_embd` Q2_K 397.9 MiB (`Vulkan_Host`); 6919 MiB of tensors, mostly IQ2_XXS (2306),
+IQ1_S (1431), IQ3_XXS (647), IQ2_S (644), Q3_K (558), Q2_K (421), IQ2_XS (418), IQ1_M (264).
+**IQ1_S and IQ1_M run on this GPU for the first time** (in the validated SPIR-V set; no
+operator check), so a token-rule failure here may be a kernel and not only rounding.
+CPU reference (`test-results/local/model-reference/20261016-093857/`): KV 64 MiB, recurrent
+150, compute 32; "A CPU is designed for general-purpose tasks and handles complex,
+sequential instructions with a few powerful cores, whereas a GPU is a specialized processor
+built for parallel processing,"; gaps 0.371 and 0.260 at tokens 0 and 1 (near ties by the
+rule), smallest first-8 gap after them 0.477 at token 5.
+
+**Step.** Largest passing total 8192 MiB; this step is **9216 MiB** (under 2 x 8192 and the
+device-memory rule's 10,649; 2.4 GiB of RADV's ~11.4 GiB free at the cap). Overheads from
+the 9B: the load adds the tensors + ~86 MiB, the server context ~640 MiB at 2048 tokens.
+Allocation caps 544 / 528 MiB, tensor-size check 544 MiB, for the 521 MiB output.
+
+| Part | Expected (model / server) | Cap | Enforced by |
+|---|---|---|---|
+| Before the load | ~90 / ~110 | in the total | ledger |
+| Weights: GPU 6521 + `Vulkan_Host` 398 + transients | ~7005 | 7424 | ledger delta |
+| Context: KV 64 / 128 + recurrent 150 + compute + scheduler | ~450 / ~950 | 1280 | ledger delta |
+| All Vulkan memory | ~7.3 / ~7.9 GiB | 8704 | dispatch guard |
+| **Total direct memory** | **~7.4 / ~7.9 GiB** | **9216** | ledger |
+
+Submissions 32,768; model watchdog 480 s (`-t 600`), server load deadline 300 s (watchdog
+1020 s, `-t 1140`). Load expected ~5 s. Any failure, hang or unclosed title ends the step at
+8192 MiB.
+
+**Result, 27B UD-IQ2_XXS** (console runs 5 and 6): pass in both modes. Model mode: rule
+`prefix`, the first 20 tokens identical to the CPU, the first difference at token 20 where the
+CPU's top two are 0.150 apart; 65/65 on the GPU; load 6.6 s; weights +6990 MiB, context +804,
+peak 7859 MiB; 12.9 tok/s on the title's clock (batch 32, no server tuning). Server: the API's
+tokens identical to the model mode's, api-check 14/14, soak 100/100 (511 ms median);
+benchmark 178 / 200 tok/s prompt, **31.0 / 30.8 tok/s generation** (128 / 512); load 6.6 s,
+ready 8.8 s; weights +7003 MiB, context +992, peak 8194 MiB of 9216. **The largest passing
+total is now 9216 MiB.** The IQ1_S/IQ1_M shaders ran here for the first time without a
+visible problem (the tokens follow the CPU for 20 steps).
+
 #### Llama 3.2 3B Instruct Q4_K_M (written before its first load)
 
 | File | Repo @ revision | Bytes | SHA-256 |
@@ -2301,10 +2346,12 @@ The abhi fork names the model and quant (1.9 GiB) but no repo; bartowski is a we
 quantizer. `llama`, 28 layers, hidden 3072, 24 Q / 8 KV heads of 128, vocabulary 128,256,
 **tied** (`token_embd` Q6_K 308.2 MiB is the output too: a GPU copy plus the input copy in
 `Vulkan_Host`, as Qwen3-VL 4B). Llama 3 chat format. CPU reference
-(`test-results/local/model-reference/20261016-094111/`): KV 112 MiB, compute 16.4; "A
-Graphics Processing Unit (GPU) and a Central Processing Unit (CPU) are two distinct
-components in a computer system. The CPU, also known as the processor"; first-8 gaps all
-above 1.4. Allocation caps 336 / 320 MiB (as the 4B). Budget (MiB), within passed totals:
+(`test-results/local/model-reference/20261016-100453/`; an earlier one had two BOS tokens,
+since the title tokenizes with `add_special` and the prompt also began with
+`<|begin_of_text|>`: the prompts now leave BOS to the tokenizer): KV 112 MiB, compute 16.4;
+"A Graphics Processing Unit (GPU) differs from a Central Processing Unit (CPU) in its
+primary function and design. While a CPU is designed to handle general-purpose"; first-8
+gaps 0.178 at token 7 (a near tie by the rule), the rest above 1.1. Allocation caps 336 / 320 MiB (as the 4B). Budget (MiB), within passed totals:
 
 | Part | Expected (model / server) | Cap |
 |---|---|---|
@@ -2314,6 +2361,33 @@ above 1.4. Allocation caps 336 / 320 MiB (as the 4B). Budget (MiB), within passe
 | **Total direct memory** | **~2.5 / ~3.0 GiB** | **4096** |
 
 Submissions 12,288; watchdog 300 s (`-t 600`), server load 180 s (`-t 1020`).
+
+#### Tier 2: Mistral 7B, MiniCPM5 2B, Granite 4.0 H-Tiny (written before their first loads)
+
+Files are the ones ProsperoAI's README links (repo and quant); revisions pinned here. All
+SHA-256 equal the Hub's LFS ids. All within passed totals (none above 6144 MiB).
+
+| Model | File | Repo @ revision | Bytes | SHA-256 |
+|---|---|---|---|---|
+| Mistral 7B Instruct v0.3 | `Mistral-7B-Instruct-v0.3.Q4_0.gguf` | `QuantFactory/Mistral-7B-Instruct-v0.3-GGUF` @ `09c7caf61e654ef9ed1ac5d3b0e56d56fabf1c7f` | 4,113,289,152 | `19c3cf872246d48e7a9784d6def7a694a6c9056cfbeb98f7061d43cd0a7c8b7f` |
+| MiniCPM5 2B | `MiniCPM5-2B-Q8_0.gguf` | `openbmb/MiniCPM5-2B-GGUF` @ `2079a22f3beaa4e306449978533478fe0522f4b3` | 2,679,710,688 | `c5415f8989bf88a8288f1b55a3cc371af53c07b0faa220a63bd7a990cfaba078` |
+| Granite 4.0 H-Tiny | `granite-4.0-h-tiny-Q4_K_M.gguf` | `ibm-granite/granite-4.0-h-tiny-GGUF` @ `08d5a8a9741dd5c1a95d2d39e25253226aa1464e` | 4,230,976,352 | `5a38b08c441ae1adbafb1d2b8a7167e0d48734d83af68b268cefea1eec553dcd` |
+
+CPU references: Mistral (`…/model-reference/20261016-100611/`; `llama`, 32 layers, KV
+128 MiB, untied output Q6_K 105 MiB; smallest first-8 gap 0.78), MiniCPM5 (`…/20261016-100623/`;
+`llama`, 42 layers, 2 KV heads, KV 42 MiB, untied output and embedding Q8_0 270.9 MiB each;
+**gap 0.082 at token 0**, a near tie by the rule), Granite 4.0 H-Tiny (`…/20261016-100631/`;
+`granitehybrid`, Mamba-2 with attention in 4 of 40 layers, 64 experts of which 6 are used,
+KV 8 MiB, recurrent 55 MiB, tied 120.6 MiB embedding; first-8 gaps above 2.1; the Mamba-2
+SSM_SCAN/SSM_CONV and this MoE layout are new on this GPU).
+
+| Model | Weights expected / cap | Context expected (model / server) / cap | Total cap | Alloc cap (guard / ggml) |
+|---|---|---|---|---|
+| Mistral 7B | ~4010 (GPU 3922 + host 72) / 4608 | ~180 / ~700 / 1024 | 6144 | 256 / 240 |
+| MiniCPM5 2B | ~2830 (GPU 2551 + host 271) / 3328 | ~100 / ~550 / 1024 | 4608 | 288 / 272 |
+| Granite 4.0 H-Tiny | ~4160 (GPU 4032 + host 121) / 4608 | ~120 / ~550 / 1024 | 6144 | 256 / 240 |
+
+Watchdog 300 s (`-t 600`), server load 180 s (`-t 1020`).
 
 ## On the console
 

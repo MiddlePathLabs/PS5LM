@@ -45,6 +45,7 @@ ours. Evidence under `test-results/ps5/`.
 |---|---|---|---|---|---|---|---|---|
 | Qwen3.5 0.8B | Q4_K_M 0.50 GiB | pass | 1.3 s | 1410 MiB | 3127 / 5255 | 252.2 | `PPSA99041/20261016-090943/`, `api-bench/20261016-091017/` | 207 tok/s (upstream v0.9.0, Slim) |
 | Qwen3.5 9B | Q4_K_M 5.29 GiB (`unsloth`) | pass (32/32 identical) | 4.6 s | 6277 MiB | 514 / 609 | 67.6 | `PPSA99041/20261016-094546/` (model), `20261016-100128/` (server), `api-bench/20261016-100138/` | 55 tok/s (upstream v0.9.0, Slim) |
+| Qwen3.8 27B | UD-IQ2_XXS 6.77 GiB (`unsloth`) | pass by the rule (20 identical, then a 0.15 tie) | 6.6 s | 8194 MiB | 178 / 200 | 31.0 | `PPSA99041/20261016-102525/` (model), `20261016-102708/` (server), `api-bench/20261016-102731/` | 20.7 tok/s at 64k context (abhi fork, Slim); upstream ~20 for UD-Q2_K_XL |
 <!-- measured-rows -->
 
 ## Fits for sure (up to 6 GiB)

@@ -601,6 +601,11 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
     ~100 s with no Vulkan wait involved, then `server_stop_timeout`. `…/20261016-094736/`.
   - Same build, second window: pass, 147 responses, 0 errors; pp 514/609, tg 67.6/67.3;
     soak 100/100; peak 6277 MiB. `…/20261016-100128/`, `api-bench/20261016-100138/`.
+- **2026-10-16, Qwen3.8 27B UD-IQ2_XXS, new step 9216 MiB:** model mode (eboot `f85910b3…bf64`)
+  pass by the rule (20 tokens identical, then a 0.15 tie), peak 7859 MiB, 12.9 tok/s,
+  `…/20261016-102525/`; server (eboot `e6eb65aa…7d83`) pass, 168 responses, tokens identical
+  to the model mode, pp 178/200, tg 31.0/30.8, soak 100/100, peak 8194 MiB,
+  `…/20261016-102708/`, `api-bench/20261016-102731/`.
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
