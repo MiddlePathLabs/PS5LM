@@ -463,7 +463,7 @@ static const struct { const char *name; char *value; } probe_environment[] = {
      * MUL_MAT with 512 rows, so a 248320-token vocabulary has a 485 MiB probe
      * result; at 240 MiB it was rejected and the LM head went to Vulkan_Host.
      * 512 MiB accepts it; allocations stay capped by the line above. */
-    {"GGML_VK_FORCE_MAX_BUFFER_SIZE", "536870912"},
+    {"GGML_VK_FORCE_MAX_BUFFER_SIZE", PS5LM_MODEL_VK_MAX_BUFFER}, /* "536870912" unless a model needs more */
 #endif
 };
 

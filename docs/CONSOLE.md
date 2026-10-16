@@ -594,6 +594,13 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   `6edb7318…e416`, patch 0005, patched RADV): pass, exit 0, closed. Mmproj load 8955 → 471
   ms; embedding, tokens (47/47, HELLO), memory (peak 4223 MB) and submissions equal to the
   earlier pass; 114.5 tok/s. Evidence: `…/PPSA99041/20261016-092200/`.
+- **2026-10-16, Qwen3.5 9B Q4_K_M** (measured models; [PORTING.md](PORTING.md#measured-models-2026-10-16)):
+  - Model mode (eboot `dc346c14…ec89`): pass, closed, 32/32 tokens identical to the CPU, peak
+    5926 MiB of 7680, 56.5 tok/s. `…/PPSA99041/20261016-094546/`.
+  - Server (eboot `1f49e6f2…9537`), first window: failed safely, closed. One request stalled
+    ~100 s with no Vulkan wait involved, then `server_stop_timeout`. `…/20261016-094736/`.
+  - Same build, second window: pass, 147 responses, 0 errors; pp 514/609, tg 67.6/67.3;
+    soak 100/100; peak 6277 MiB. `…/20261016-100128/`, `api-bench/20261016-100138/`.
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.

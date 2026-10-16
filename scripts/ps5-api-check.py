@@ -152,9 +152,24 @@ def rule(tokens, cpu, gaps):
     return 'fail', first
 
 
+def measured_variant(name):
+    """A measured model (docs/PORTING.md "Measured models"): its prompt from
+    scripts/model-variants.sh, its CPU reference from build/native-m-NAME/gen/."""
+    if not name.startswith('m-'):
+        raise SystemExit(f'unknown variant {name}')
+    import subprocess
+    prompt = subprocess.run(['bash', '-c', 'source "$1"; ps5lm_model_variant "$2" >/dev/null || exit 2; '
+                             'for f in "${mv_flags[@]}"; do case $f in -DPS5LM_MODEL_PROMPT=*) printf %s "$f";; esac; done',
+                             '_', str(ROOT / 'scripts/model-variants.sh'), name[2:]],
+                            check=True, capture_output=True, text=True).stdout
+    prompt = prompt.removeprefix('-DPS5LM_MODEL_PROMPT="').removesuffix('"').replace('\\n', '\n')
+    return {'model_run': None, 'reference': f'build/native-{name}/gen/model-reference.h', 'prompt': prompt}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--variant', choices=VARIANTS, required=True)
+    ap.add_argument('--variant', required=True,
+                    help=f"{', '.join(VARIANTS)}, or m-NAME for an entry of scripts/model-variants.sh")
     ap.add_argument('--host', default=os.environ.get('PS5_HOST'))
     ap.add_argument('--port', type=int, default=8081)
     ap.add_argument('--wait', type=int, default=180, help='seconds to wait for /health')
@@ -166,7 +181,7 @@ def main():
     if not args.host:
         raise SystemExit('set PS5_HOST or pass --host')
     base = f'http://{args.host}:{args.port}'
-    v = dict(VARIANTS[args.variant])
+    v = dict(VARIANTS[args.variant]) if args.variant in VARIANTS else measured_variant(args.variant)
     if args.model_run:
         v['model_run'] = args.model_run
     if not v['model_run']:

@@ -20,7 +20,9 @@ case "$mode" in
     stream-probe) work="$root/build/native-$mode" ;;
     # Vision (docs/PORTING.md "Vision"): Qwen3-VL text model + mmproj, model mode and server mode.
     vl4b|vl8b|server-vl4b|server-vl8b) work="$root/build/native-$mode" ;;
-    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen|moe3b|olmoe|qwen3moe|server-moe3b|server-olmoe|server-qwen3moe|stream-probe|vl4b|vl8b|server-vl4b|server-vl8b]" >&2; exit 2 ;;
+    # Measured models (docs/PORTING.md "Measured models"): one entry of scripts/model-variants.sh.
+    m-*|server-m-*) work="$root/build/native-$mode" ;;
+    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen|moe3b|olmoe|qwen3moe|server-moe3b|server-olmoe|server-qwen3moe|stream-probe|vl4b|vl8b|server-vl4b|server-vl8b|m-NAME|server-m-NAME]" >&2; exit 2 ;;
 esac
 # Which model a model or server build loads: its define and its file (checked below).
 variant_flag=(); want=Qwen3.5-0.8B-Q4_K_M.gguf
@@ -32,12 +34,19 @@ case "$mode" in
     qwen3moe|server-qwen3moe) variant_flag=(-DPS5LM_MODEL_QWEN3MOE); want=Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf ;;
     vl4b|server-vl4b) variant_flag=(-DPS5LM_MODEL_QWEN3VL4B); want=Qwen3VL-4B-Instruct-Q4_K_M.gguf ;;
     vl8b|server-vl8b) variant_flag=(-DPS5LM_MODEL_QWEN3VL8B); want=Qwen3VL-8B-Instruct-Q4_K_M.gguf ;;
+    m-*|server-m-*)
+        source "$root/scripts/model-variants.sh"
+        ps5lm_model_variant "${mode#*m-}"
+        variant_flag=("${mv_flags[@]}"); want=$mv_file
+        # The validator writes this pin into the manifest.
+        export PS5LM_MV_PIN="{\"repo\":\"$mv_repo\",\"revision\":\"$mv_revision\",\"file\":\"$mv_file\",\"bytes\":$mv_bytes,\"sha256\":\"$mv_sha256\"}" ;;
 esac
 vision=0
 case "$mode" in vl4b|vl8b|server-vl4b|server-vl8b) vision=1 ;; esac
 model_files=(Qwen3.5-0.8B-Q4_K_M.gguf granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
     granite-3.1-3b-a800m-instruct-Q4_K_M.gguf OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf
     Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf Qwen3VL-4B-Instruct-Q4_K_M.gguf Qwen3VL-8B-Instruct-Q4_K_M.gguf)
+case " ${model_files[*]} " in *" $want "*) ;; *) model_files+=("$want") ;; esac
 app="$work/PPSA99041"
 sdk="${PS5_NATIVE_SDK:-$upstream/.deps/native/ps5-payload-sdk}"
 archive="${RADV_ARCHIVE:-$root/build/radv-preflight/radv-ps5lm/src/amd/vulkan/libvulkan_radeon.a}"
@@ -113,7 +122,7 @@ compile_flags=()
 server=0
 case "$mode" in server*) server=1 ;; esac
 model_mode=0
-case "$mode" in model|moe|moe3b|olmoe|qwen3moe|stream-probe|vl4b|vl8b) model_mode=1 ;; esac
+case "$mode" in model|moe|moe3b|olmoe|qwen3moe|stream-probe|vl4b|vl8b|m-*) model_mode=1 ;; esac
 if [ "$mode" != compute ]; then
     PS5LM_LLAMA_SERVER=$server PS5LM_LLAMA_MTMD=$vision PS5_NATIVE_SDK="$sdk" RADV_ARCHIVE="$archive" \
         bash "$root/scripts/build-native-llama.sh"

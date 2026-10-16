@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import os
 import pathlib
 import re
 import struct
@@ -147,6 +148,12 @@ def main():
     moe = work.name in ('native-moe', 'native-server')
     # The MoE climb (docs/PORTING.md "Larger MoE models"): native-VARIANT / native-server-VARIANT.
     climb = next((v for v in CLIMB if work.name in ('native-' + v, 'native-server-' + v)), None)
+    # Measured models (docs/PORTING.md "Measured models"): native-m-NAME / native-server-m-NAME,
+    # pinned by scripts/model-variants.sh (passed in PS5LM_MV_PIN by build-native-compute.sh).
+    measured = re.sub(r'^native-(server-)?m-', '', work.name) if re.match(r'^native-(server-)?m-', work.name) else None
+    if measured:
+        CLIMB[measured] = json.loads(os.environ['PS5LM_MV_PIN'])
+        climb = measured
     model = moe or server or climb is not None or work.name == 'native-model'
     # SSD streaming probe (docs/PORTING.md "SSD streaming"): llama.cpp linked, no model load.
     probe = work.name == 'native-stream-probe'

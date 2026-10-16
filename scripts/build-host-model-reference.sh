@@ -19,6 +19,9 @@ case "$variant" in
     moe3b) default_model="$root/models/granite-3.1-3b-a800m-instruct-Q4_K_M.gguf"; out="native-moe3b"; vflags=(-DPS5LM_MODEL_GRANITE3B) ;;
     olmoe) default_model="$root/models/OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf"; out="native-olmoe"; vflags=(-DPS5LM_MODEL_OLMOE) ;;
     qwen3moe) default_model="$root/models/Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf"; out="native-qwen3moe"; vflags=(-DPS5LM_MODEL_QWEN3MOE) ;;
+    # Measured models: an entry of scripts/model-variants.sh; writes build/native-m-NAME/gen/.
+    m-*) source "$root/scripts/model-variants.sh"; ps5lm_model_variant "${variant#m-}"
+         default_model="$root/models/$mv_file"; out="native-$variant"; vflags=("${mv_flags[@]}") ;;
     *) echo "Unknown PS5LM_MODEL_VARIANT: $variant" >&2; exit 2 ;;
 esac
 model="${1:-$default_model}"

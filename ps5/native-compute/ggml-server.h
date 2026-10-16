@@ -7,7 +7,9 @@
 #ifndef PS5LM_GGML_SERVER_H
 #define PS5LM_GGML_SERVER_H
 #include "ggml-model.h"
-#if defined(PS5LM_MODEL_QWEN3VL8B)
+#if defined(PS5LM_MODEL_CUSTOM)
+#define PS5LM_SERVER_WORKLOAD PS5LM_SERVER_WORKLOAD_NAME /* "server-NAME", from model-variants.sh */
+#elif defined(PS5LM_MODEL_QWEN3VL8B)
 #define PS5LM_SERVER_WORKLOAD "server-vl8b"
 #elif defined(PS5LM_MODEL_QWEN3VL4B)
 #define PS5LM_SERVER_WORKLOAD "server-vl4b"

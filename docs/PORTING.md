@@ -2223,6 +2223,98 @@ and the 4223 MB direct peak equal to the earlier run, 3339 submissions; 114.5 to
 Evidence `test-results/ps5/PPSA99041/20261016-092200/`. The 8B (12.5 s before) takes the same
 patch at its next build.
 
+### Measured models (2026-10-16)
+
+The models other PS5 ports report, run on this build in the same way: the model mode (pass
+rule against the host CPU reference, unchanged) and then `scripts/ps5-api-bench.py` in server
+mode. Their numbers come from other consoles and builds and are reported beside ours, never
+as ours (`docs/MODELS.md` "Measured on this console").
+
+**Plumbing.** One entry per model in `scripts/model-variants.sh` (pin, prompt in the model's
+chat format, budget, allocation caps), read by `build-native-compute.sh m-NAME` /
+`server-m-NAME` and `PS5LM_MODEL_VARIANT=m-NAME build-host-model-reference.sh`. The title
+gets the entry as `-D` flags (`PS5LM_MODEL_CUSTOM` in `ggml-model.h`; it refuses to build
+with any parameter missing). ggml's tensor-size check (`GGML_VK_FORCE_MAX_BUFFER_SIZE`,
+512 MiB) is now a per-model parameter too, for output matrices above 512 MiB; every
+existing build keeps 512 MiB.
+
+**Choice of runs.** One model-mode run per model; the server run only after a pass (or after
+a near-tie failure written up as for Qwen3-30B), so speed is measured on a build whose
+output was checked.
+
+#### Qwen3.5 9B Q4_K_M (written before its first load)
+
+| File | Repo @ revision | Bytes | SHA-256 |
+|---|---|---|---|
+| `Qwen3.5-9B-Q4_K_M.gguf` | `unsloth/Qwen3.5-9B-GGUF` @ `3885219b6810b007914f3a7950a8d1b469d598a5` | 5,680,522,464 | `03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8` |
+
+SHA-256 equal to the Hub's LFS id. Upstream's file (its README names this repo and quant).
+`qwen35`, 32 layers (one in four full attention: KV in 8 layers), hidden 4096, FFN 12288,
+16 Q / 4 KV heads of 256; vocabulary 248,320, **untied**: `output.weight` Q6_K 795.7 MiB
+(one tensor), `token_embd` Q4_K 545.6 MiB (expected in `Vulkan_Host`); 5406.9 MiB of
+tensors. Host CPU reference (`test-results/local/model-reference/20261016-092600/`): KV
+32 MiB, recurrent state 50.25, compute 31.9; text "While both CPUs and GPUs are central
+processing units, they are designed for fundamentally different workloads. A CPU features
+a small number of powerful, complex cores optimized for"; smallest first-8 gap 0.196 at
+token 2 (a near tie by the rule), next 0.15 at token 21.
+
+**Allocation caps**: the output needs one 796 MiB allocation: dispatch guard 832 MiB, ggml
+816 MiB, tensor-size check 832 MiB. RADV's own limit is ~4 GiB; the direct-memory block
+ceiling measured in a payload is 6 GiB.
+
+**Budget** (MiB). The largest passing total is 8192 (Qwen3-VL 8B), so 7680 is not a new step.
+
+| Part | Expected (model / server) | Cap | Enforced by |
+|---|---|---|---|
+| Before the load | ~90 / ~110 | in the total | ledger |
+| Weights: GPU 4861 + `Vulkan_Host` 546 + transients | ~5420 / ~5440 | 6144 | ledger delta across the load |
+| Context: KV 32 / 64 + recurrent 50 + compute (32 at batch 32; larger at the server's 512) + scheduler | ~160 / ~900 | 1536 | ledger delta across the context |
+| Serving scratch | – / < 64 | in the total | ledger |
+| All Vulkan memory | ~5.6 / ~6.4 GiB | 7680 | dispatch guard |
+| **Total direct memory** | **~5.7 / ~6.5 GiB** | **7680** | ledger |
+
+Submissions 24,576; model-mode watchdog 300 s (`-t 600`), server load deadline 180 s
+(`-t 1020`). Loads expected ~4 s (`read(2)`).
+
+**Result, 9B** (console runs 2–4 of this session). Model mode: pass, all 32 tokens identical
+to the CPU, 33/33 layers on the GPU, load 5.3 s, weights +5475 MiB, context +387, peak 5926
+MiB of 7680, 56.5 tok/s on the title's clock. Server, first window: **fail (safe)**, closed.
+api-check passed 13/13, then the benchmark's second 128-token request (the warm-up's twin)
+never finished: no llama.cpp line for ~100 s until the 600 s window ended, and the server
+could not stop within 60 s (`server_stop_timeout`). No guard fatal fired, and every
+fence and semaphore wait in the title is bounded at 2 s and fatal, so the thread was not in a
+Vulkan wait; nothing in the kernel log (no GPU fault, no memory pressure); peak 6263 MiB;
+all services answered afterwards. Same build, second window: pass, 147 responses, 0 errors;
+benchmark 514 / 609 tok/s prompt and 67.6 / 67.3 generation (128 / 512); api-check 14/14
+with a 100-request soak (median 216 ms); load 4.6 s, weights +5493 MiB, context +643 MiB,
+peak 6277 MiB; stop to freed 1.5 s. **Open:** the one stall is not reproduced (147 requests
+after it); it looks like upstream's "stops answering, waiting on the GPU" but no Vulkan wait
+was involved here. `/ps5lm/stats` is now polled during benchmarks to catch the next one.
+
+#### Llama 3.2 3B Instruct Q4_K_M (written before its first load)
+
+| File | Repo @ revision | Bytes | SHA-256 |
+|---|---|---|---|
+| `Llama-3.2-3B-Instruct-Q4_K_M.gguf` | `bartowski/Llama-3.2-3B-Instruct-GGUF` @ `5ab33fa94d1d04e903623ae72c95d1696f09f9e8` | 2,019,377,696 | `6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff` |
+
+The abhi fork names the model and quant (1.9 GiB) but no repo; bartowski is a well-known
+quantizer. `llama`, 28 layers, hidden 3072, 24 Q / 8 KV heads of 128, vocabulary 128,256,
+**tied** (`token_embd` Q6_K 308.2 MiB is the output too: a GPU copy plus the input copy in
+`Vulkan_Host`, as Qwen3-VL 4B). Llama 3 chat format. CPU reference
+(`test-results/local/model-reference/20261016-094111/`): KV 112 MiB, compute 16.4; "A
+Graphics Processing Unit (GPU) and a Central Processing Unit (CPU) are two distinct
+components in a computer system. The CPU, also known as the processor"; first-8 gaps all
+above 1.4. Allocation caps 336 / 320 MiB (as the 4B). Budget (MiB), within passed totals:
+
+| Part | Expected (model / server) | Cap |
+|---|---|---|
+| Before the load | ~90 / ~110 | in the total |
+| Weights: GPU 1918 + `Vulkan_Host` 308 + transients | ~2230 | 2816 |
+| Context: KV 112 / 224 + compute + scheduler | ~170 / ~600 | 1024 |
+| **Total direct memory** | **~2.5 / ~3.0 GiB** | **4096** |
+
+Submissions 12,288; watchdog 300 s (`-t 600`), server load 180 s (`-t 1020`).
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

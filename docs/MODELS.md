@@ -32,6 +32,21 @@ Qwen3-30B-A3B-Instruct-2507 IQ2_M (9.19 GiB, `qwen3moe`) loaded and ran fully
 resident in a 10560 MiB budget (peak 9723 MiB, 37 tok/s on the title's clock)
 but failed the CPU-comparison rule at token 7; see [CONSOLE.md](CONSOLE.md).
 
+## Measured on this console
+
+Every model other PS5 ports report, run on this build the same way: the model mode against
+the host CPU reference (pass rule in [PORTING.md](PORTING.md)), then `scripts/ps5-api-bench.py`
+in server mode (llama-server's medians, 128 generated tokens; prompt tok/s at 128 / 512-token
+prompts). Load time and peak direct memory are from the server run. Their numbers come from
+other consoles (mostly a base PS5 or a Slim) and other builds: they stand beside ours, not as
+ours. Evidence under `test-results/ps5/`.
+
+| Model | File | Pass / fail | Load | Peak | Prompt tok/s (128 / 512) | Generation tok/s | Evidence | Their number (source) |
+|---|---|---|---|---|---|---|---|---|
+| Qwen3.5 0.8B | Q4_K_M 0.50 GiB | pass | 1.3 s | 1410 MiB | 3127 / 5255 | 252.2 | `PPSA99041/20261016-090943/`, `api-bench/20261016-091017/` | 207 tok/s (upstream v0.9.0, Slim) |
+| Qwen3.5 9B | Q4_K_M 5.29 GiB (`unsloth`) | pass (32/32 identical) | 4.6 s | 6277 MiB | 514 / 609 | 67.6 | `PPSA99041/20261016-094546/` (model), `20261016-100128/` (server), `api-bench/20261016-100138/` | 55 tok/s (upstream v0.9.0, Slim) |
+<!-- measured-rows -->
+
 ## Fits for sure (up to 6 GiB)
 
 | Model | Ollama name | Quant | Size | Architecture | Notes |

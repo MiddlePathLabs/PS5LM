@@ -76,6 +76,19 @@
 #endif
 #define PS5LM_MODEL_WATCHDOG_S 300u
 #define PS5LM_MODEL_SERVER_LOAD_S 180u
+#elif defined(PS5LM_MODEL_CUSTOM)
+/* Measured models (build modes "m-NAME", "server-m-NAME"; docs/PORTING.md
+ * "Measured models"): every parameter comes from scripts/model-variants.sh as
+ * -D flags, so a model is one table entry there. Required: PS5LM_GGML_WORKLOAD,
+ * PS5LM_MODEL_FILE, PS5LM_MODEL_BYTES, PS5LM_MODEL_PROMPT, PS5LM_MODEL_WEIGHTS_MIB,
+ * PS5LM_MODEL_CONTEXT_MIB, PS5LM_MODEL_TOTAL_MIB, PS5LM_MODEL_SUBMIT_LIMIT,
+ * PS5LM_MODEL_WATCHDOG_S, PS5LM_MODEL_SERVER_LOAD_S; optional the allocation caps. */
+#if !defined(PS5LM_GGML_WORKLOAD) || !defined(PS5LM_MODEL_FILE) || !defined(PS5LM_MODEL_BYTES) || \
+    !defined(PS5LM_MODEL_PROMPT) || !defined(PS5LM_MODEL_WEIGHTS_MIB) || !defined(PS5LM_MODEL_CONTEXT_MIB) || \
+    !defined(PS5LM_MODEL_TOTAL_MIB) || !defined(PS5LM_MODEL_SUBMIT_LIMIT) || \
+    !defined(PS5LM_MODEL_WATCHDOG_S) || !defined(PS5LM_MODEL_SERVER_LOAD_S)
+#error "PS5LM_MODEL_CUSTOM needs every parameter from scripts/model-variants.sh"
+#endif
 #elif defined(PS5LM_MODEL_QWEN3MOE)
 /* Step 3 of the MoE climb (build modes "qwen3moe", "server-qwen3moe"; docs/PORTING.md
  * "Larger MoE models"). bartowski/Qwen_Qwen3-30B-A3B-Instruct-2507-GGUF
@@ -176,6 +189,9 @@
 #ifndef PS5LM_MODEL_GPU_ALLOCATION_MIB
 #define PS5LM_MODEL_GPU_ALLOCATION_MIB 256u
 #define PS5LM_MODEL_VK_MAX_ALLOCATION "251658240"
+#endif
+#ifndef PS5LM_MODEL_VK_MAX_BUFFER /* supports_op's tensor-size check only (main.c) */
+#define PS5LM_MODEL_VK_MAX_BUFFER "536870912"
 #endif
 #ifndef PS5LM_VISION_MMPROJ_MIB
 #define PS5LM_VISION_MMPROJ_MIB 0u /* text models: no mmproj */
