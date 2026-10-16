@@ -1444,6 +1444,75 @@ mode: 9/9, tokens identical to the model mode, weights +4042 MiB, context
 Largest passing total is now **6144 MiB**; step 3 may be at most 12,288 MiB,
 and the device-memory rule holds it to 10,649 MiB.
 
+#### Step 3: Qwen3-30B-A3B-Instruct-2507 IQ2_M, total 10560 MiB
+
+Written before its first run. Chosen over the IQ2_S (8.14 GiB) and IQ2_XXS
+(7.05 GiB) files of the same repo because it is the largest that keeps the
+measured overheads well inside 10,649 MiB; the 10.16 GiB Q2_K would not.
+Host CPU reference (`test-results/local/model-reference/20261015-210644/`):
+model buffer 9407.33 MiB (untied output 204.02 MiB Q5_K, the largest tensor;
+input embedding 127.51 MiB IQ3_S, expected in `Vulkan_Host`; experts IQ2_XS
+(6160 MiB) and IQ3_XXS (2426 MiB), attention IQ2_S/Q4_K/Q5_K), KV 96.00 MiB
+(1024 cells, 48 layers, 4 KV heads x 128, F16), compute 19.05 MiB, graph 3030
+nodes; text "A GPU (Graphics Processing Unit) and a CPU (Central Processing
+Unit) differ primarily in their design and intended use. A CPU is optimized
+for general-purpose tasks"; prompt 22 tokens; first-8 gaps all above 1.4,
+smallest 0.160 at token 27. New on this GPU: the IQ2_XS, IQ2_S, IQ3_XXS and
+IQ3_S matmul and `MUL_MAT_ID` shaders (all in the validated SPIR-V set; never
+run here), 128 experts, a 151,936-row LM head (split by patch 0006).
+
+Overheads measured in steps 1 and 2: the load adds the model buffers plus
+5 MiB (model mode) or 25 MiB (server); the context adds KV plus 36–59 MiB;
+about 90 MiB is live before the load; serving adds about 15 MiB.
+
+| Part | Expected | Cap | Enforced by |
+|---|---|---|---|
+| Before the load | ~90 MiB | in the total | ledger |
+| Weights | ~9415 MiB (model), ~9435 (server) | 9728 MiB | as step 1 |
+| Context, model mode (KV 96, compute ~19) | ~200 MiB | 768 MiB | as step 1 |
+| Context, server mode (KV 192 at 2048) | ~300 MiB | 768 MiB | as step 1 |
+| All Vulkan memory | ~9.5 GiB | 10496 MiB | dispatch guard |
+| **Total direct memory** | **~9.6 GiB** (9,850 MiB) | **10560 MiB** | ledger |
+
+10,560 MiB leaves 1,114 MiB of RADV's ~11.4 GiB (11,674 MiB) free even at the
+cap; the expected peak leaves about 1.8 GiB. Queue submissions in the model
+mode: 24,576 (expected ~10,000: one per MiB uploaded). Load at the measured
+~92 MB/s: ~107 s; model-mode watchdog 480 s (`-t 600`), server load deadline
+300 s (watchdog 1020 s, `-t 1140`). If this step fails in any way the climb
+ends at 6144 MiB (OLMoE).
+
+**Result: fail by the pass rule** (console run 5 of this climb). The GPU's
+first difference from the CPU is at token 7, where the CPU's top two logits are
+1.415 apart (the GPU's 0.154): neither an 8-token prefix nor a near tie. The
+text is coherent, and the run was otherwise clean: 49/49 on the GPU, load
+106.8 s, weights +9447 MiB, context +205 MiB, direct peak 9723 MiB of 10560,
+Vulkan 0 after free, closed. Offline: forcing the GPU's first 8 tokens into the
+CPU run reproduces all 24 later GPU tokens; Metal's logits differ from the
+CPU's by as much as the PS5's. Most likely IQ2 rounding at a decision boundary,
+not a kernel error, but the rule stands, so **the climb ends at 6144 MiB with
+OLMoE-1B-7B-0125** (repeat run identical). The model file stays on the console
+for the next phase.
+
+**Proposals for the user** (not done): (a) a rule for low-bit quants that also
+accepts a first difference where the *GPU's* top two are within 0.5 and the
+CPU, forced with the GPU's token, reproduces the GPU's continuation (both true
+here); (b) the next step from 6144 MiB with a model at 6–6.5 GiB total, e.g.
+Qwen3-30B-A3B IQ2_XXS (7.05 GiB, would need about 7.6 GiB: under the 12,288
+doubling, over 6144 so it is a new step) or a 4–5 bit 7–8B MoE, to find a
+`qwen3moe` file that passes before returning to ~9.6 GiB; (c) an operator
+check of the IQ2_XS/IQ3_XXS `MUL_MAT_ID` and `MUL_MAT` shaders against the CPU
+at the model's shapes, to put a number on their error.
+
+**Performance notes for the next phase** (observed, not acted on): generation
+falls with the layer count more than with the active parameters (16-layer
+OLMoE 232 tok/s, 24-layer models ~212, 32-layer Granite 3B 150, 48-layer
+Qwen3-30B 37 on the title's clock), which fits a fixed cost per layer
+(submissions and waits; fusion, graph optimisation and async compute are off);
+prompt processing at ubatch 32 is 570–710 tok/s for the 2–4 GB models and
+22 tok/s for the IQ2 30B (`MUL_MAT_ID` with IQ types at 32 tokens); loading
+reads ~92 MB/s from `/data` (107 s for 9.9 GB), so larger or parallel reads
+would shorten big loads.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works; one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

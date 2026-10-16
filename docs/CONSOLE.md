@@ -342,6 +342,35 @@ run and one server-mode run with the benchmark.
   `…/api-check/20261015-212310/`. Benchmark (`…/api-bench/20261015-212407/`):
   128-token prompt 614.5 (613–624) tok/s, generation 232.4 (230.8–232.7) tok/s;
   512-token prompt 570.9 (568–573) tok/s, generation 223.1 (222.4–225.8) tok/s.
+- **Step 3, Qwen3-30B-A3B-Instruct-2507 IQ2_M (total cap 10560 MiB): failed
+  by the pass rule; the climb ends at 6144 MiB.** Model mode (PID 191, eboot
+  `45f84bab…eae5`): the first 7 tokens equal the CPU reference; at token 7 the
+  GPU chose " differs" where the CPU chose " and" with a top-two gap of 1.415
+  (the GPU's own gap there: 0.154). The rule allows a first difference before
+  token 8 only where the CPU's gap is within 0.5, so the title reported
+  failure (exit 1). Text coherent: "A GPU (Graphics Processing Unit) differs
+  from a CPU (Central Processing Unit) in its design and purpose. While a CPU is
+  optimized for handling a wide range"; no NaN, no repeats. Everything else
+  worked: 49/49 offloaded, 2 splits (`Vulkan0` 9279.82 MiB, input embedding
+  127.51 MiB in `Vulkan_Host`), load 106.8 s (about 92 MB/s), weights +9447 MiB
+  (cap 9728), context +205 MiB (cap 768), direct peak 9723 MiB (cap 10560;
+  about 1.9 GiB of RADV's ~11.4 GiB left), Vulkan peak 9524 MiB, 0 after free,
+  10,341 submissions, generation 37.4 tok/s and prompt 21.8 tok/s on the
+  title's clock; closed and unmounted, console answering.
+  `test-results/ps5/PPSA99041/20261015-214345/`.
+  Offline diagnosis: with the GPU's first 8 tokens forced, the CPU produces all
+  24 remaining GPU tokens exactly
+  (`test-results/local/qwen3moe-forced-continuation/20261015-214738/`); the same
+  title code on Metal (M2 Pro) stays on the CPU's path for 27 tokens but its
+  logits differ from the CPU's by as much as the PS5's do (top-two gap shifts
+  up to 1.39) (`test-results/local/model-metal-smoke/qwen3moe-20261015-2146/`).
+  So this looks like 2-bit rounding crossing a decision boundary rather than a
+  wrong kernel, but the rule was fixed before the run and is not changed after
+  it. No server-mode run at this size.
+- **Repeat of the largest passing model** (OLMoE model mode, eboot
+  `eaec7392…9326` unchanged, PID 193): pass, identical 32 tokens, identical
+  memory figures and submission count, generation 175.2 tok/s.
+  `test-results/ps5/PPSA99041/20261015-214817/`.
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.

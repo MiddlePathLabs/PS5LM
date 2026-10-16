@@ -4,6 +4,23 @@ Models worth running on a PS5, from what is popular on Ollama in October 2026, w
 
 The console has 16 GB shared by everything. How much one PS5LM process can hold is what `probes/memprobe` measures. Until then: ProsperoAI already keeps a 6.37 GiB model resident on this console, so up to about 6 GiB is safe, and anything above 8 GiB waits for the probe.
 
+## Ran on this console's GPU (PS5 Pro, native title, fully resident)
+
+Correct against the host CPU reference and through the LAN API; numbers are
+llama-server's medians for a 128-token prompt and 128 generated tokens
+([CONSOLE.md](CONSOLE.md), pins in [PORTING.md](PORTING.md)).
+
+| Model | Quant | File | Architecture | Budget | Prompt / generation tok/s |
+|---|---|---|---|---|---|
+| Qwen3.5 0.8B | Q4_K_M | 0.50 GiB | qwen35 (dense) | 1536 MiB | 1744 / 214 |
+| Granite 3.1 1B-A400M | Q4_K_M | 0.77 GiB | granitemoe | 1536 MiB | 1370 / 212 |
+| Granite 3.1 3B-A800M | Q4_K_M | 1.88 GiB | granitemoe | 3072 MiB | 711 / 150 |
+| OLMoE 1B-7B 0125 | Q4_K_M | 3.92 GiB | olmoe | 6144 MiB | 615 / 232 |
+
+Qwen3-30B-A3B-Instruct-2507 IQ2_M (9.19 GiB, `qwen3moe`) loaded and ran fully
+resident in a 10560 MiB budget (peak 9723 MiB, 37 tok/s on the title's clock)
+but failed the CPU-comparison rule at token 7; see [CONSOLE.md](CONSOLE.md).
+
 ## Fits for sure (up to 6 GiB)
 
 | Model | Ollama name | Quant | Size | Architecture | Notes |
