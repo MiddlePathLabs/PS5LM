@@ -1683,6 +1683,23 @@ model-mode runs, rule `prefix` as before):
 | Qwen3.5 0.8B (24 layers) | 1744 / 1884 → **3147 / 5264** | 214.0 / 210.9 → **254.5 / 252.7** | 0.8 → 1.3 s (cached) | 796 → 621, 13.8 → 11.0 |
 | OLMoE-1B-7B (16 layers) | 615 / 571 → **1429 / 2628** | 232.4 / 223.1 → **326.9 / 309.2** | 45.6 → **3.6 s** | 582 → 326, 11.9 → 11.2 |
 
+Granite 3.1 1B-A400M (server run 7): prompt 1370/1396 → **3328/6532**,
+generation 212.5 → **344.6**, load 6.0 → 1.0 s, completion identical to its
+model mode. Granite 3.1 3B-A800M (run 8): prompt 711/709 → **1762/3321**,
+generation 149.5 → **236.7**, load 21.5 → 2.1 s; its completion now equals the
+CPU reference for all 32 tokens (the old GPU run split at a 0.105 tie), so
+fusion changed its rounding, within the rule. Neither Granite had a
+model-mode run with the new defaults (the gate is Qwen and OLMoE).
+
+**MMVQ knob: no effect, nothing changed.** With `disable_mmvq` the dispatch
+counts and rates of Granite 1B, Granite 3B and OLMoE stayed the same (within
+1 %), so the integer-dot mat-vec path is not used for these models on this
+device; the knob stays as tooling with no default change.
+
+**Final code** (runs 9–12: the MMVQ knob added, defaults as kept): OLMoE
+server and Qwen server within 1 % of runs 6 and 5; both model modes pass with
+tokens, memory and submission counts identical to runs 3 and 4.
+
 **What limits speed now.** Generation: a Qwen token's graph is 3.47 ms (621
 dispatches, ~5.6 µs each), an OLMoE token's 3.45 ms (326 dispatches, but MoE
 mat-vecs are larger); the GPU time per dispatch, not submission or CPU
@@ -1690,6 +1707,20 @@ recording, sets it. More fusion (fewer dispatches) or fewer barriers is what
 would help; ggml-vk's remaining unfused ops are the place to look. Prompt
 processing: 512-token chunks are the largest the context allows; larger
 chunks need a larger compute buffer and (Qwen) a larger scheduler block.
+
+
+**Granite 1B and 3B with the kept defaults, and an MMVQ knob** (written before
+console runs 7 and 8). One server window each (`server`, `server-moe3b`):
+API check against their earlier model-mode runs (tokens identical, or the
+model mode's rule against the CPU reference, since fusion may change
+rounding), the benchmark, then `--plan mmvq`: a runtime knob
+`disable_mmvq` (patch 0007 again, per graph, -1 = device default) turns off
+ggml-vk's integer-dot mat-vec path, which on AMD quantises the input to q8_1
+in a dispatch of its own for every mat-vec with K ≥ 2048. Context at 512
+tokens, measured on the Mac (Metal): Granite 1B compute 9.6 → 38.3 MiB, 3B
+11.9 → 56.6 MiB, so server contexts of about 180 and 240 MiB against caps of
+768 and 384 MiB; totals about 1.2 and 2.4 GiB against 2048 and 3072 MiB.
+No cap changes.
 
 
 ## On the console

@@ -65,12 +65,12 @@ static uint64_t ps5lm_elapsed_ms(void)
 }
 #define MODEL_PATH PS5LM_HOST_MODEL_PATH
 /* No Vulkan on the Mac: the knobs are kept and reported, nothing reads them. */
-static std::atomic<long long> host_knobs[5] = {-1, -1, -1, -1, -1};
-static const char *const host_knob_names[5] = {"disable_fusion", "disable_graph_optimize", "nodes_per_submit",
-                                               "submit_mflop", "dmmv_wg"};
+static std::atomic<long long> host_knobs[6] = {-1, -1, -1, -1, -1, -1};
+static const char *const host_knob_names[6] = {"disable_fusion", "disable_graph_optimize", "nodes_per_submit",
+                                               "submit_mflop", "dmmv_wg", "disable_mmvq"};
 static int ps5lm_vk_set_knob(const char *name, long long value)
 {
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 6; ++i)
         if (std::strcmp(name, host_knob_names[i]) == 0) { host_knobs[i].store(value); return 0; }
     return -1;
 }
@@ -78,8 +78,8 @@ static int ps5lm_vk_perf_json(char *out, size_t size)
 {
     return std::snprintf(out, size, "{\"host_rehearsal\":true,\"knobs\":{\"disable_fusion\":%lld,"
                          "\"disable_graph_optimize\":%lld,\"nodes_per_submit\":%lld,\"submit_mflop\":%lld,"
-                         "\"dmmv_wg\":%lld}}", host_knobs[0].load(), host_knobs[1].load(), host_knobs[2].load(),
-                         host_knobs[3].load(), host_knobs[4].load());
+                         "\"dmmv_wg\":%lld,\"disable_mmvq\":%lld}}", host_knobs[0].load(), host_knobs[1].load(),
+                         host_knobs[2].load(), host_knobs[3].load(), host_knobs[4].load(), host_knobs[5].load());
 }
 #else
 extern "C" [[noreturn]] void ps5lm_ops_fatal(const char *stage);

@@ -424,10 +424,43 @@ runs passed with exit 0 and `"closed": true`; the console answered after each.
   `…/PPSA99041/20261015-235759/`, `…/api-check/20261015-235804/`,
   `…/api-bench/20261015-235816/`, `…/api-tune/20261015-235821/`.
 
+- **Run 7, server Granite 3.1 1B-A400M, kept defaults + MMVQ knob** (eboot
+  `05a10f87…2213`): 9/9, completion identical to the model mode's GPU tokens
+  (`20261015-200238`); benchmark 3328.1/6532.0 prompt, 344.6/335.7
+  generation; MMVQ off changed nothing (535 dispatches either way). Load
+  0.98 s (was 6.0 s); context +170 MiB, direct peak 1132 MiB, 0 Vulkan after
+  free. `…/PPSA99041/20261016-000917/`, `…/api-check/20261016-000922/`,
+  `…/api-bench/20261016-000932/`, `…/api-tune/20261016-000936/`.
+- **Run 8, server Granite 3.1 3B-A800M** (eboot `51faea5e…940f`): 9/9; the
+  completion is now identical to the CPU reference for all 32 tokens (rule
+  `identical`; the old model mode split at the 0.105 tie at token 20);
+  benchmark 1762.3/3320.8 prompt, 236.7/228.1 generation; MMVQ off: no change.
+  Load 2.11 s (was 21.5 s); context +243 MiB (cap 384), direct peak 2380 MiB
+  (cap 3072). `…/PPSA99041/20261016-001031/`, `…/api-check/20261016-001046/`,
+  `…/api-bench/20261016-001047/`, `…/api-tune/20261016-001053/`.
+- **Run 9, server OLMoE, current code** (eboot `1f7ac7c9…618b`): 9/9
+  identical; defaults 1427.7/2656.0 prompt, 329.3/309.9 generation (run 6
+  within 1 %); MMVQ off: no change (326 dispatches either way).
+  `…/PPSA99041/20261016-001255/`, `…/api-check/20261016-001300/`,
+  `…/api-tune/20261016-001311/`.
+- **Run 10, server Qwen3.5 0.8B, final code** (eboot `9d64ad93…383a`): 9/9
+  identical; benchmark 3156.5/5271.2 prompt, 253.5/251.3 generation (run 5
+  within 0.6 %); load 1.09 s; direct peak 1407 MiB (cap 2048).
+  `…/PPSA99041/20261016-001630/`, `…/api-check/20261016-001641/`,
+  `…/api-bench/20261016-001644/`.
+- **Runs 11 and 12, model mode, final code** (Qwen eboot `d8c6410f…56b1`,
+  OLMoE `354b6fb4…cc00`): both pass with rule `prefix` (22 and 25 equal
+  tokens), tokens, memory figures and submission counts identical to runs 3
+  and 4; loads 0.84 s and 3.59 s. `…/PPSA99041/20261016-001703/`,
+  `…/PPSA99041/20261016-001732/`. Console answering afterwards, port 8081
+  closed.
+
 | Model (API, 128/512-token prompt) | Prompt tok/s before → after | Generation tok/s before → after | Load before → after |
 |---|---|---|---|
-| Qwen3.5 0.8B Q4_K_M | 1744 / 1884 → 3147 / 5264 | 214.0 / 210.9 → 254.5 / 252.7 | 0.8 s → 1.3 s (cached file) |
+| Qwen3.5 0.8B Q4_K_M | 1744 / 1884 → 3147 / 5264 | 214.0 / 210.9 → 254.5 / 252.7 | 0.8 s → 0.8–1.3 s (cached file) |
 | OLMoE-1B-7B-0125 Q4_K_M | 615 / 571 → 1429 / 2628 | 232.4 / 223.1 → 326.9 / 309.2 | 45.6 s → 3.6 s |
+| Granite 3.1 1B-A400M Q4_K_M | 1370 / 1396 → 3328 / 6532 | 212.5 / 210.6 → 344.6 / 335.7 | 6.0 s → 1.0 s |
+| Granite 3.1 3B-A800M Q4_K_M | 711 / 709 → 1762 / 3321 | 149.5 / 146.4 → 236.7 / 228.1 | 21.5 s → 2.1 s |
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.

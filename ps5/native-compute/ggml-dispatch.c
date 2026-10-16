@@ -57,17 +57,22 @@ static uint64_t mono_ns(void)
 #ifndef PS5LM_VK_DEFAULT_DMMV_WG
 #define PS5LM_VK_DEFAULT_DMMV_WG -1
 #endif
+#ifndef PS5LM_VK_DEFAULT_DISABLE_MMVQ
+#define PS5LM_VK_DEFAULT_DISABLE_MMVQ -1
+#endif
 static const struct { const char *name; long long min, max; } knob_info[] = {
     {"disable_fusion", 0, 1},
     {"disable_graph_optimize", 0, 1},
     {"nodes_per_submit", 1, 100000},
     {"submit_mflop", 0, 10000000},
     {"dmmv_wg", 0, 1},
+    {"disable_mmvq", 0, 1},
 };
 #define KNOB_COUNT (sizeof(knob_info) / sizeof(knob_info[0]))
 static atomic_llong knobs[KNOB_COUNT] = {
     PS5LM_VK_DEFAULT_DISABLE_FUSION, PS5LM_VK_DEFAULT_DISABLE_GRAPH_OPTIMIZE,
     PS5LM_VK_DEFAULT_NODES_PER_SUBMIT, PS5LM_VK_DEFAULT_SUBMIT_MFLOP, PS5LM_VK_DEFAULT_DMMV_WG,
+    PS5LM_VK_DEFAULT_DISABLE_MMVQ,
 };
 long long ps5lm_vk_knob(int which)
 {
@@ -105,11 +110,11 @@ int ps5lm_vk_perf_json(char *out, size_t size)
         "\"fence_wait_ns\":%llu,\"semaphore_waits\":%llu,\"semaphore_wait_ns\":%llu,"
         "\"graphs\":%llu,\"graph_ns\":%llu,\"knobs\":{\"disable_fusion\":%lld,"
         "\"disable_graph_optimize\":%lld,\"nodes_per_submit\":%lld,\"submit_mflop\":%lld,"
-        "\"dmmv_wg\":%lld}}",
+        "\"dmmv_wg\":%lld,\"disable_mmvq\":%lld}}",
         atomic_load(&submissions), LOAD(perf_submit_ns), LOAD(perf_dispatches), LOAD(perf_fence_waits),
         LOAD(perf_fence_ns), LOAD(perf_semaphore_waits), LOAD(perf_semaphore_ns), LOAD(perf_graphs),
         LOAD(perf_graph_ns), ps5lm_vk_knob(0), ps5lm_vk_knob(1), ps5lm_vk_knob(2), ps5lm_vk_knob(3),
-        ps5lm_vk_knob(4));
+        ps5lm_vk_knob(4), ps5lm_vk_knob(5));
 #undef LOAD
 }
 #define TIMEOUT 2000000000ull

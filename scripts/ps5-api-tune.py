@@ -48,7 +48,7 @@ bench = load('ps5_api_bench', 'ps5-api-bench.py')
 
 KNOBS = {  # name: (allowed range besides -1); the title checks them again
     'disable_fusion': (0, 1), 'disable_graph_optimize': (0, 1), 'nodes_per_submit': (1, 100000),
-    'submit_mflop': (0, 10000000), 'dmmv_wg': (0, 1), 'prompt_batch': (1, 512),
+    'submit_mflop': (0, 10000000), 'dmmv_wg': (0, 1), 'disable_mmvq': (0, 1), 'prompt_batch': (1, 512),
 }
 BASE = {k: -1 for k in KNOBS}  # -1: the build's defaults (prompt_batch -1 = the build's chunk)
 SIZES = (128, 512)
@@ -161,7 +161,7 @@ def main():
     ap.add_argument('--wait', type=int, default=300, help='seconds to wait for /health')
     ap.add_argument('--budget', type=int, default=540, help='stop starting configurations after this many seconds')
     ap.add_argument('--shutdown', action='store_true')
-    ap.add_argument('--plan', choices=('full', 'cadence'), default='full')
+    ap.add_argument('--plan', choices=('full', 'cadence', 'mmvq'), default='full')
     args = ap.parse_args()
     if not args.host:
         raise SystemExit('set PS5_HOST or pass --host')
@@ -200,6 +200,16 @@ def main():
         good = [r for r in results if r and r['check']['pass']]
         return max(good, key=key) if good else None
 
+    if args.plan == 'mmvq':
+        # Integer-dot mat-vec off and on, alternated so drift shows.
+        for n, k in (('defaults', {}), ('no_mmvq', {'disable_mmvq': 1}), ('defaults_again', {}),
+                     ('no_mmvq_again', {'disable_mmvq': 1})):
+            run(n, k)
+        report['chosen'] = None
+        report['stats_end'] = stats(base)
+        report['elapsed_s'] = time.monotonic() - started
+        save()
+        return finish(args, base, report, out, {})
     if args.plan == 'cadence':
         # After the defaults changed: the build's defaults, then submit cadences around them.
         for n, k in (('defaults', {}), ('submit_25mflop', {'submit_mflop': 25}),

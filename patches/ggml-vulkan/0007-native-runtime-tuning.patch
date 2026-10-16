@@ -3,7 +3,8 @@ performance work (docs/PORTING.md "Performance"). ps5/native-compute/ggml-dispat
 the knobs (-1 = what device creation chose from the closed environment) and the counters.
 Latched once per graph on the computing thread: fusion (with the ADD+RMS_NORM partials),
 graph optimisation, nodes per submit, the flop-based submit split; read at each mat-vec
-pipeline choice: the workgroup size. No change on other platforms.
+pipeline choice: the workgroup size; per graph: integer-dot mat-vec (MMVQ) off. No change on
+other platforms.
 
 --- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
 +++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
@@ -19,7 +20,7 @@ pipeline choice: the workgroup size. No change on other platforms.
 +extern "C" void ps5lm_vk_graph_begin(void);
 +extern "C" void ps5lm_vk_graph_end(void);
 +enum { PS5LM_KNOB_DISABLE_FUSION, PS5LM_KNOB_DISABLE_GRAPH_OPTIMIZE, PS5LM_KNOB_NODES_PER_SUBMIT,
-+       PS5LM_KNOB_SUBMIT_MFLOP, PS5LM_KNOB_DMMV_WG };
++       PS5LM_KNOB_SUBMIT_MFLOP, PS5LM_KNOB_DMMV_WG, PS5LM_KNOB_DISABLE_MMVQ };
 +#endif
  
  void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
@@ -38,7 +39,17 @@ pipeline choice: the workgroup size. No change on other platforms.
          device->partials_binding_alignment =
              std::max(4u, (uint32_t)device->properties.limits.minStorageBufferOffsetAlignment);
  
-@@ -5642,6 +5659,12 @@
+@@ -4973,6 +4990,9 @@
+         } else if (getenv("GGML_VK_FORCE_MMVQ")) {
+             device->mmvq_mode = 1;
+         }
++#if defined(__PROSPERO__)
++        device->ps5lm_default_mmvq_mode = device->mmvq_mode;
++#endif
+ 
+         return device;
+     }
+@@ -5642,6 +5662,12 @@
          }
      }
  
@@ -51,7 +62,7 @@ pipeline choice: the workgroup size. No change on other platforms.
      if (b_type == GGML_TYPE_Q8_1) {
          if (ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
              dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
-@@ -5730,6 +5753,12 @@
+@@ -5730,6 +5756,12 @@
          }
      }
  
@@ -64,7 +75,7 @@ pipeline choice: the workgroup size. No change on other platforms.
      if (b_type == GGML_TYPE_Q8_1) {
          if (ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
              dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
-@@ -14239,6 +14268,18 @@
+@@ -14239,6 +14271,21 @@
      ctx->device->diag_prev_start = -1;
      ctx->device->diag_prev_end = -1;
  
@@ -77,13 +88,16 @@ pipeline choice: the workgroup size. No change on other platforms.
 +        ctx->device->add_rms_fusion = !ctx->device->disable_fusion && ctx->device->ps5lm_add_rms_fusion_capable;
 +        const long long nodes = ps5lm_vk_knob(PS5LM_KNOB_NODES_PER_SUBMIT);
 +        ctx->device->max_nodes_per_submit = nodes > 0 ? (uint32_t) nodes : ctx->device->ps5lm_default_nodes_per_submit;
++        // 1: integer-dot mat-vec (src1 quantized to q8_1 first) off, as GGML_VK_DISABLE_MMVQ.
++        const long long mmvq = ps5lm_vk_knob(PS5LM_KNOB_DISABLE_MMVQ);
++        ctx->device->mmvq_mode = mmvq > 0 ? -1 : ctx->device->ps5lm_default_mmvq_mode;
 +    }
 +#endif
 +
      if (vk_instance.debug_utils_support) {
          ctx->device->debug_cmdbuf_idx = 0;
      }
-@@ -14328,6 +14369,13 @@
+@@ -14328,6 +14375,13 @@
          }
      }
      uint64_t flops_per_submit = std::min(flops_cap, ctx->last_total_flops / 40u);
@@ -97,7 +111,7 @@ pipeline choice: the workgroup size. No change on other platforms.
  
      auto const submit_after = [&](int start, int end) {
          if (ctx->device->serialize_submissions) {
-@@ -14729,6 +14777,9 @@
+@@ -14729,6 +14783,9 @@
      if (!ctx->device->support_async) {
          ggml_vk_synchronize(ctx);
      }
@@ -107,7 +121,7 @@ pipeline choice: the workgroup size. No change on other platforms.
  
      return GGML_STATUS_SUCCESS;
  
-@@ -14740,6 +14791,12 @@
+@@ -14740,6 +14797,12 @@
      VK_LOG_DEBUG("ggml_vk_graph_optimize(" << graph->n_nodes << " nodes)");
      ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
  
@@ -122,7 +136,7 @@ pipeline choice: the workgroup size. No change on other platforms.
      }
 --- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h
 +++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
-@@ -732,6 +732,13 @@
+@@ -732,6 +732,14 @@
      bool add_rms_fusion;
      uint32_t partials_binding_alignment;
      uint32_t max_nodes_per_submit;
@@ -132,6 +146,7 @@ pipeline choice: the workgroup size. No change on other platforms.
 +    bool ps5lm_add_rms_fusion_capable;
 +    bool ps5lm_default_disable_fusion;
 +    bool ps5lm_default_disable_graph_optimize;
++    int32_t ps5lm_default_mmvq_mode;
 +#endif
  
      bool shader_64b_indexing;

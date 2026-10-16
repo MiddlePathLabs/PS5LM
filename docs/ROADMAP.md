@@ -164,13 +164,13 @@ window. Kept: ggml-vk fusion and graph optimisation on, a submission every
 1000 nodes, 512-token prompt chunks, and `read(2)` instead of `fread` for the
 model file. Qwen3.5 0.8B: prompt 1744/1884 → 3147/5264 tok/s, generation
 214 → 254.5; OLMoE-1B-7B: prompt 615/571 → 1429/2628, generation 232 → 327,
-load 45.6 → 3.6 s. Tokens identical to the earlier model-mode runs. See
-PORTING.md "Performance".
+load 45.6 → 3.6 s; Granite 1B generation 212 → 345, Granite 3B 150 → 237.
+Tokens identical to the earlier model-mode runs. See PORTING.md "Performance".
 
 **Next proposals** (none started): (a) generation is now set by GPU time per
 dispatch (~5 µs, 621 dispatches per Qwen token): find the remaining unfused
-op chains in ggml-vk for these graphs and fuse or batch them; (b) Granite 3B
-and Qwen3-30B with the new defaults; (c) SSD weight streaming: the file reads
+op chains in ggml-vk for these graphs and fuse or batch them; (b) Qwen3-30B
+with the new defaults (it was 37 tok/s at 48 layers); (c) SSD weight streaming: the file reads
 at 1.6–2.8 GB/s with one thread and 1–64 MiB `read()` calls, 3.7 GB/s with
 four, so streaming must use large `read()` calls (never `fread`); (d) the
 next model size step under AGENTS.md's rules, with a written budget. The old
