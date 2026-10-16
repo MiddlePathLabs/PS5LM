@@ -2367,6 +2367,17 @@ Submissions 40,960; watchdog 480 s (`-t 600`), server load 300 s (`-t 1140`). If
 mode fails or its peak leaves under 256 MiB to the cap, the server run is skipped. Any
 failure, hang or unclosed title ends the step at 9216 MiB.
 
+**Result, 27B UD-Q2_K_XL** (console runs 14–16). Run 14 stopped safely at the title's own
+placement check, `model_not_fully_offloaded`: llama.cpp offloaded 66/66, but the file's MTP
+layer (`n_layer` 64, `n_layer_all` 65) made the count one more than the check's `n_layer + 1`.
+The model and server checks now add the GGUF's `<arch>.nextn_predict_layers`. Run 15: pass,
+**all 32 tokens identical to the CPU**, load 7.8 s, weights +9099 MiB, context +804, peak
+9968 MiB of 10624, 12.6 tok/s on the title's clock. Run 16 (server): tokens identical to the
+model mode, api-check 14/14, soak 100/100 (527 ms); 168 / 194 tok/s prompt, **29.9 / 29.7
+tok/s generation**; load 7.7 s, ready 9.9 s; weights +9117, context +990, **peak 10304 MiB of
+10624**, the most a title has held. **The largest passing total is now 10624 MiB, the
+device-memory rule's limit: the climb cannot go further under the current rule.**
+
 #### Llama 3.2 3B Instruct Q4_K_M (written before its first load)
 
 | File | Repo @ revision | Bytes | SHA-256 |

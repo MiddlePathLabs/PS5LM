@@ -45,7 +45,7 @@ Decoding is bound by memory bandwidth: tokens per second ≈ effective bandwidth
 - [x] Safe CPU defaults for the PS5 (`patches/0001`): threads = allowed CPUs minus two, no busy-waiting
 - [x] `llama-server` on the console with a chat page in the PS5's own browser (`scripts/ps5-chat.sh`, `ps5/webui`); phones and laptops use the same page on port 8081
 - [ ] `llama-bench` numbers for the small model
-- [ ] **First light: Qwen3.8-27B generates text on the PS5.** UD-Q2_K_XL if Phase 0 says it fits, UD-IQ2_XXS if not. A video of it, posted with the repo.
+- [ ] **First light: Qwen3.8-27B generates text on the PS5.** UD-Q2_K_XL if Phase 0 says it fits, UD-IQ2_XXS if not. A video of it, posted with the repo. (On the GPU instead of the CPU: UD-Q2_K_XL runs in the native title at 29.9 tok/s and UD-IQ2_XXS at 31, 2026-10-16; the video is still to do.)
 
 Expect 1 to 3 tok/s here. Slow, but it is Qwen 3.8 running on a PS5, and the claim we want first.
 
@@ -181,6 +181,15 @@ modes in a new 8192 MiB step (encode 291 ms, 79 tok/s, peak 6875 MiB).
 The mmproj now loads with `read(2)` (patch 0005): 9.0 → 0.47 s for the 4B,
 same tokens, embedding and memory. Proposal: a larger or multi-image cap only
 with a written budget.
+
+**6. Measured models (2026-10-16).** Every model other PS5 ports report, run the same way on
+this build (pass rule against the CPU reference, then the API benchmark): see MODELS.md
+"Measured on this console". Qwen3.5 9B (67.6 tok/s), **Qwen3.8 27B UD-Q2_K_XL (29.9 tok/s, all 32 tokens identical to
+the CPU, peak 10.1 GiB in a 10624 MiB step, the device-memory rule's limit)** and UD-IQ2_XXS
+(31.0 tok/s), Llama 3.2 3B (139.4), Mistral 7B
+(90.8), MiniCPM5 2B (120.3), Granite 4.0 H-Tiny (141.4). One table entry per model
+(`scripts/model-variants.sh`). The mmproj now loads with `read(2)` (9.0 → 0.47 s).
+ProsperoAI's mat-vec knobs (subgroup 32, RM_KQ 4) gave nothing here.
 
 **Next proposals** (none started): (a) generation is now set by GPU time per
 dispatch (~5 µs, 621 dispatches per Qwen token): find the remaining unfused

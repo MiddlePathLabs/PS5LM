@@ -612,6 +612,11 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   Granite 4.0 H-Tiny (`…/20261016-110300/`, tg 141.4).
 - **2026-10-16, ProsperoAI's knobs on server-qwen:** `DMMV_SUBGROUP=32` no change
   (`…/20261016-104135/`), `RM_KQ=4` slightly slower (`…/20261016-104415/`); neither kept.
+- **2026-10-16, Qwen3.8 27B UD-Q2_K_XL, step 10624 MiB:** run 14 stopped at the title's
+  offload check (the file's MTP layer; check fixed), `…/20261016-112921/`; model mode pass,
+  32/32 identical to the CPU, peak 9968 MiB, `…/20261016-113206/`; server pass, tg 29.9/29.7,
+  pp 168/194, soak 100/100, peak 10304 MiB, `…/20261016-113242/`, left deployed (eboot
+  `51f9f74d…c0d0`, a server build: launching it opens port 8081 for one 600 s window).
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.

@@ -209,6 +209,17 @@ extern "C" void ps5lm_server_ready(void)
     phase("ready");
 }
 
+/* Layers llama.cpp loads beyond n_layer: a model's MTP ("nextn") layers, which the pin
+ * offloads and counts in "offloaded N/M" but does not run (Qwen3.8 27B UD-Q2_K_XL has one). */
+[[maybe_unused]] static int ps5lm_nextn_layers(const llama_model *model)
+{
+    char arch[64] = {0}, key[96], value[32] = {0};
+    if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) <= 0) return 0;
+    std::snprintf(key, sizeof(key), "%s.nextn_predict_layers", arch);
+    if (llama_model_meta_val_str(model, key, value, sizeof(value)) <= 0) return 0;
+    return std::atoi(value);
+}
+
 /* Placement, read from llama's own log lines on their way to the server's log,
  * as the model mode reads them: all layers offloaded, and the graph splits. */
 static ggml_log_callback next_log;
@@ -274,7 +285,7 @@ extern "C" llama_model *__wrap_llama_model_load_from_file(const char *path, llam
     weights_bytes.store(added);
     if (added > PS5LM_MODEL_WEIGHTS_MIB * MiB) ps5lm_ops_fatal("model_weights_budget");
     if (offloaded.load() < 0 || offloaded.load() != offload_total.load() ||
-        offload_total.load() != llama_model_n_layer(model) + 1)
+        offload_total.load() != llama_model_n_layer(model) + ps5lm_nextn_layers(model) + 1)
         ps5lm_ops_fatal("model_not_fully_offloaded");
     return model;
 }

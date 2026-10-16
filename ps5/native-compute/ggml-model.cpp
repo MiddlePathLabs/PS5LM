@@ -137,6 +137,17 @@ static std::string piece(const llama_vocab *vocab, llama_token token)
     return n > 0 ? std::string(buffer, size_t(n)) : std::string();
 }
 
+/* Layers llama.cpp loads beyond n_layer: a model's MTP ("nextn") layers, which the pin
+ * offloads and counts in "offloaded N/M" but does not run (Qwen3.8 27B UD-Q2_K_XL has one). */
+[[maybe_unused]] static int ps5lm_nextn_layers(const llama_model *model)
+{
+    char arch[64] = {0}, key[96], value[32] = {0};
+    if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) <= 0) return 0;
+    std::snprintf(key, sizeof(key), "%s.nextn_predict_layers", arch);
+    if (llama_model_meta_val_str(model, key, value, sizeof(value)) <= 0) return 0;
+    return std::atoi(value);
+}
+
 struct step {
     llama_token top1, top2;
     float logit1, logit2;
@@ -228,7 +239,7 @@ static int generate(run &r)
     if (r.live_model - r.live_start > PS5LM_MODEL_WEIGHTS_MIB * MiB) fatal("model_weights_budget");
 #if !defined(PS5LM_HOST_REFERENCE)
     if (placement.offloaded < 0 || placement.offloaded != placement.offload_total ||
-        placement.offload_total != r.n_layer + 1)
+        placement.offload_total != r.n_layer + ps5lm_nextn_layers(model) + 1)
         fatal("model_not_fully_offloaded");
 #endif
 
