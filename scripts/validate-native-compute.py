@@ -113,7 +113,8 @@ def nid(name):
 def main():
     work, sdk, archive, llvm, root = map(pathlib.Path, sys.argv[1:])
     app = work / 'PPSA99041'
-    model = work.name == 'native-model'
+    moe = work.name == 'native-moe'
+    model = moe or work.name == 'native-model'
     ggml_ops = model or work.name == 'native-ggml-ops'
     source = Elf(work / 'llvm-pie.elf')
     native = Elf(work / 'eboot.elf')
@@ -249,15 +250,19 @@ def main():
         'limits': 'See ps5/native-compute/main.c and docs/PORTING.md for physical allocation budget and fence/watchdog bounds; no hardware proof.',
         'closure_limit': 'SDK-stub and converted NID closure is checked locally; real module exports/permissions on Pro12.70 require hardware.',
     }
-    manifest['workload'] = ('model-dense-greedy' if model else
+    manifest['workload'] = ('model-moe-greedy' if moe else 'model-dense-greedy' if model else
                             'ggml-attn-prefill-scoped-fp32' if ggml_ops else 'integer-dispatch')
     if ggml_ops:
-        manifest['build_command'] += ' model' if model else ' ggml-ops'
+        manifest['build_command'] += ' moe' if moe else ' model' if model else ' ggml-ops'
         manifest['llama'] = json.loads((root / 'build/native-llama/manifest.json').read_text())
         manifest['build_scripts']['build-native-llama.sh'] = digest(root / 'scripts/build-native-llama.sh')
         manifest['hardware_gate'] = 'Native capabilities/tiny compute gates passed separately; ggml operators require one monitored Play and independent lifecycle evidence.'
     if model:
-        manifest['model'] = {'repo': 'unsloth/Qwen3.5-0.8B-GGUF',
+        manifest['model'] = {'repo': 'bartowski/granite-3.1-1b-a400m-instruct-GGUF',
+                             'revision': '940d2e1f9f65330615c7c8e980e6c5ac73d3360c',
+                             'file': 'granite-3.1-1b-a400m-instruct-Q4_K_M.gguf', 'bytes': 821847360,
+                             'sha256': '3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb',
+                             'console_path': '/data/PS5LM/models/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf'} if moe else {'repo': 'unsloth/Qwen3.5-0.8B-GGUF',
                              'revision': '6ab461498e2023f6e3c1baea90a8f0fe38ab64d0',
                              'file': 'Qwen3.5-0.8B-Q4_K_M.gguf', 'bytes': 532517120,
                              'sha256': 'bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517',

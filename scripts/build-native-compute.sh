@@ -10,7 +10,8 @@ case "$mode" in
     compute) work="$root/build/native-compute" ;;
     ggml-ops) work="$root/build/native-ggml-ops" ;;
     model) work="$root/build/native-model" ;;
-    *) echo "Usage: $0 [compute|ggml-ops|model]" >&2; exit 2 ;;
+    moe) work="$root/build/native-moe" ;;   # the model mode with the small MoE (PS5LM_MODEL_MOE)
+    *) echo "Usage: $0 [compute|ggml-ops|model|moe]" >&2; exit 2 ;;
 esac
 app="$work/PPSA99041"
 sdk="${PS5_NATIVE_SDK:-$upstream/.deps/native/ps5-payload-sdk}"
@@ -86,15 +87,17 @@ if [ "$mode" != compute ]; then
     llama="$root/build/native-llama"
     compile_flags+=(-DPS5LM_GGML_OPS)
     runner=ggml-ops
-    if [ "$mode" = model ]; then
+    if [ "$mode" = model ] || [ "$mode" = moe ]; then
         # The CPU reference comes first: scripts/build-host-model-reference.sh.
         [ -f "$work/gen/model-reference.h" ] || { echo "Missing $work/gen/model-reference.h" >&2; exit 2; }
         compile_flags+=(-DPS5LM_GGML_MODEL)
+        [ "$mode" = moe ] && compile_flags+=(-DPS5LM_MODEL_MOE)
         runner=ggml-model
     fi
     compile -std=c11 ${compile_flags[@]+"${compile_flags[@]}"} -I "$mesa/include" -I "$root/ps5/native-compute" \
         -c "$root/ps5/native-compute/ggml-dispatch.c" -o "$work/obj/ggml-dispatch.o"
-    compile -std=c++17 -fexceptions -frtti -I "$llama/source/ggml/include" -I "$llama/source/include" \
+    compile -std=c++17 -fexceptions -frtti ${compile_flags[@]+"${compile_flags[@]}"} \
+        -I "$llama/source/ggml/include" -I "$llama/source/include" \
         -I "$root/ps5/native-compute" -I "$work/gen" \
         -c "$root/ps5/native-compute/$runner.cpp" -o "$work/obj/$runner.o"
     extra_objects+=("$work/obj/ggml-dispatch.o" "$work/obj/$runner.o")
@@ -126,7 +129,7 @@ if [ "$mode" != compute ]; then
         --defsym=vkCmdCopyBuffer=vk_common_CmdCopyBuffer
         --defsym=vkGetPhysicalDeviceFeatures2=vk_common_GetPhysicalDeviceFeatures2)
 fi
-if [ "$mode" = model ]; then
+if [ "$mode" = model ] || [ "$mode" = moe ]; then
     radv_link_flags+=(--defsym=posix_madvise=ps5lm_posix_madvise)
 fi
 # The PS5 target's nodllstorageclass policy overrides C visibility attributes.
@@ -135,7 +138,7 @@ vk_local=''
 if [ "$mode" != compute ]; then
     vk_local='vkGetInstanceProcAddr; vkGetDeviceProcAddr; vkCmdCopyBuffer; vkGetPhysicalDeviceFeatures2;'
 fi
-if [ "$mode" = model ]; then
+if [ "$mode" = model ] || [ "$mode" = moe ]; then
     vk_local="$vk_local posix_madvise;"
 fi
 printf '{ local: __wrap_*; mkstemp; ps5lm_mkstemp; %s ps5lm_*; };\n' "$vk_local" > "$work/probe-local.map"
@@ -186,6 +189,16 @@ fi
 "$tool" self --extract --file "$app/eboot.bin" --out "$work/extracted.elf"
 "$tool" self --extract --file "$app/sce_module/libc.prx" --out "$work/libc-extracted.elf"
 bash "$upstream/tools/inspect.sh" "$work/eboot.elf" > "$work/native-structure.txt"
+if [ "$mode" = model ] || [ "$mode" = moe ]; then
+    # Every object must name the same model: the title's setup check (main.c) and
+    # the loader (ggml-model.cpp) once disagreed because a flag missed one of them.
+    want=Qwen3.5-0.8B-Q4_K_M.gguf; other=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
+    [ "$mode" = moe ] && { want=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf; other=Qwen3.5-0.8B-Q4_K_M.gguf; }
+    for object in "$work/obj/main.o" "$work/obj/ggml-model.o"; do
+        strings "$object" | grep -qF "$want" || { echo "$object does not name $want" >&2; exit 2; }
+        if strings "$object" | grep -qF "$other"; then echo "$object names $other" >&2; exit 2; fi
+    done
+fi
 python3 "$root/scripts/validate-native-compute.py" "$work" "$sdk" "$archive" "$llvm" "$root"
 echo "Packaged $app.zip (local validation only; GPU NOT executed)."
 echo 'Hardware order REQUIRED: PPSA99040 capability queries + observed clean exit, then PPSA99041.'

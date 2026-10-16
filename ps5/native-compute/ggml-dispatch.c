@@ -7,6 +7,8 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <stdio.h>
+int sceKernelDebugOutText(int channel, const char *text);
 
 _Noreturn void ps5lm_ops_fatal(const char *stage);
 _Noreturn void __wrap_abort(void)
@@ -197,8 +199,12 @@ static VkResult submit(VkQueue q, uint32_t n, const VkSubmitInfo *i, VkFence f)
 static void dispatch(VkCommandBuffer b, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!real_dispatch || !x || !y || !z || x > GROUP_DIM_LIMIT || y > GROUP_DIM_LIMIT ||
-        z > GROUP_Z_LIMIT || (uint64_t)x * y * z > GROUP_TOTAL_LIMIT)
+        z > GROUP_Z_LIMIT || (uint64_t)x * y * z > GROUP_TOTAL_LIMIT) {
+        char line[96];
+        snprintf(line, sizeof line, "PS5LM_DISPATCH_LIMIT {\"x\":%u,\"y\":%u,\"z\":%u}\n", x, y, z);
+        sceKernelDebugOutText(0, line);
         ps5lm_ops_fatal("ggml_dispatch_limit");
+    }
     real_dispatch(b, x, y, z);
 }
 PFN_vkVoidFunction ps5lm_vkGetDeviceProcAddr(VkDevice, const char *);

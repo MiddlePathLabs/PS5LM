@@ -94,44 +94,39 @@ smaller fully resident MoE, not the earlier 27B/performance targets.
   - Attention-scoped FP32 causal prefill passed on hardware: four queries, all 512 outputs checked, zero mismatches, maximum error `1.49011612e-7`, actual `fp32` shader with `device_fp16=true`, clean closure and services responsive. Targeted tiny operators pass; full selected-model coverage and resident-model validation remain open. Reuse upstream app/server work while retaining the audited runtime.
 - [x] `scripts/ps5-native-test.sh`: deploy, launch and watch a native title from the Mac, so a GPU test needs no Play by hand ([MAC_DEV_LOOP.md](MAC_DEV_LOOP.md#native-titles)). Verified on the console 2026-10-15.
 - [ ] Conservative prompt batches and bounded GPU submissions; record completion/timeouts before increasing load.
-- [x] Establish model, context and scratch residency with a small dense model. Qwen3.5 0.8B Q4_K_M ran on the GPU with an explicit 1.5 GiB budget (peak 1085 MiB) and matched the CPU reference: 22 identical greedy tokens, then a near tie. The LM head stays on the CPU because of RADV's storage-buffer range ([CONSOLE.md](CONSOLE.md)). The reported 12 GiB direct budget is still not a validated safe allocation limit.
-- [ ] Run the LM head on the GPU: split large matmuls under `maxStorageBufferRange` (ggml-vk has a split path for mat-vec) or use 64-bit indexing if RADV offers it.
+- [x] Establish model, context and scratch residency with a small dense model. Qwen3.5 0.8B Q4_K_M ran on the GPU with an explicit 1.5 GiB budget (peak 1085 MiB) and matched the CPU reference: 22 identical greedy tokens, then a near tie. At first the LM head ran on the CPU (see the next item, now fixed). The reported 12 GiB direct budget is still not a validated safe allocation limit.
+- [x] Run the LM head on the GPU. The cause was not the storage-buffer range (RADV reports 4 GiB) but ggml's op-size limit forced to 240 MiB, which refused llama's 485 MiB load-time probe; fixed with a 512 MiB op-size limit plus ggml splitting dispatches at the title's 65535-group guard. Qwen3.5 0.8B: 2 splits, same tokens, generation 7.2 → 140 tok/s ([PORTING.md](PORTING.md#lm-head-actual-cause-and-fix-2026-10-15-evening)).
+- [x] Small resident MoE: Granite 3.1 1B-A400M Q4_K_M passed on the GPU (near tie at token 1, then 24 tokens equal to the CPU given that token), 160 tok/s, direct peak 991 MiB of 1536 ([CONSOLE.md](CONSOLE.md)).
 - [ ] Run a smaller fully resident MoE after the dense baseline; SSD expert streaming remains deferred.
 - [ ] Record repeatable prompt-processing and generation benchmarks without extrapolating external results.
 
 **Done when** selected resident models produce correct output through the LAN API and repeatable local benchmarks are recorded.
 
-### Next on the GPU: a plan, not yet run (2026-10-15)
+### Next on the GPU (2026-10-15; steps 0 and 1 done)
 
-Nothing below has been downloaded, uploaded or run. Each step is one bounded
+Steps 0 and 1 are done; nothing for steps 2 and 3 has been run. Each step is one bounded
 `ps5-native-test.sh` run, read before the next, as the dense baseline was.
 
-**0. LM head on the GPU first.** The dense baseline leaves its 198.93 MiB output
-matrix on the CPU because RADV reports a smaller `maxStorageBufferRange`. Log
-that limit, then either let ggml-vk split matrices above it (it already splits
-mat-vec rows at `ggml-vulkan.cpp` `needs_split`; `supports_op` would need to
-allow it) as a patch in `patches/ggml-vulkan/`, or use 64-bit indexing if this
-RADV offers it. Pass: the same Qwen3.5 0.8B test with 2 graph splits and the
-same token rule. Any MoE or larger dense model has the same problem, since
-their output and embedding matrices are bigger still.
+**0. LM head on the GPU: done (2026-10-15).** The cause was ggml's op-size
+limit, which the title had forced to 240 MiB: llama's load-time probe for the
+output layer is a 512-row matmul with a 485 MiB result. Raised to 512 MiB (it
+sizes no allocation), and ggml-vk now sees the title's 65535-group dispatch
+limit so it splits the 248320-row mat-vec. Qwen3.5 0.8B: 2 splits, same tokens,
+generation 7.2 → 140 tok/s. See PORTING.md "LM head: actual cause and fix".
 
-**1. Smaller fully resident MoE.** Candidate: IBM Granite 3.1 1B-A400M Instruct
-(`granitemoe`, 32 experts, 8 active, plain attention, 49,155-token vocabulary,
-so its output matrix fits the storage range).
-`bartowski/granite-3.1-1b-a400m-instruct-GGUF` at
-`940d2e1f9f65330615c7c8e980e6c5ac73d3360c`,
-`granite-3.1-1b-a400m-instruct-Q4_K_M.gguf`, 821,847,360 bytes, LFS SHA-256
-`3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb`.
-Step up afterwards: the 3B-A800M Q4_K_M at
-`be9a36f042806cb586bc65556c527079782b78e0`, 2,016,888,384 bytes,
-`48e0edcd578fd4462f26127f04c651d0e650741110185297741089aea01a82b3`
-(just under the 2 GiB per-file limit used so far). Before any run: a bounded
-`MUL_MAT_ID` check at its real expert shapes and types (the passed Q4_K MoE
-case used 2 experts, K=256), a host CPU reference with the same pass rule, and
-a written budget like the dense one (weights ~0.8 GiB, context ≤ 384 MiB,
-total ≤ 2 GiB). Upload with `scripts/ps5-put-file.py`. One model per launch:
-the `abhi245y/PS5LM` fork reports ~5 GiB of GPU memory held after an in-app
-unload, so never unload and reload within a run.
+**1. Smaller fully resident MoE: done (2026-10-15).** Granite 3.1 1B-A400M
+Q4_K_M (`bartowski/granite-3.1-1b-a400m-instruct-GGUF@940d2e1f`, 821,847,360
+bytes, SHA-256 `3a2ec1c2…42eb`) passed on the GPU and repeated identically:
+near tie at token 1, then 24 tokens equal to the CPU given the same token,
+2 splits, 160 tok/s generation, direct-memory peak 991 MiB of a 1536 MiB cap.
+See PORTING.md "Small MoE". Next size up, still under the 2 GiB per-file limit:
+the 3B-A800M Q4_K_M at `be9a36f042806cb586bc65556c527079782b78e0`,
+2,016,888,384 bytes,
+`48e0edcd578fd4462f26127f04c651d0e650741110185297741089aea01a82b3`; it needs a
+larger written budget (weights ~2.1 GiB with transients, so a total near
+2.75 GiB) before its first load. One model per launch: the `abhi245y/PS5LM`
+fork reports ~5 GiB of GPU memory held after an in-app unload, so never unload
+and reload within a run.
 
 **2. LAN API.** Port upstream's `llama_server()` integration (`ps5/app/main.cpp`
 in `cobanov/PS5LM`) into a new build mode of PPSA99041, not its build: keep our

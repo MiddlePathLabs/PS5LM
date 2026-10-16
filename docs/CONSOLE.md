@@ -175,6 +175,55 @@ remain cautionary evidence, not a validated safe budget for the Pro.
   `test-results/ps5/PPSA99041/20261015-193802/`.
   An unchanged repeat (PID 158) gave the same 32 tokens and the same memory
   figures, and closed cleanly: `test-results/ps5/PPSA99041/20261015-194035/`.
+  Correction (from the runs below): the 3-split placement was not caused by
+  `maxStorageBufferRange`, and the LM head sat in the plain `CPU` buffer, not
+  `Vulkan_Host` (that one held the input embedding). Cause and fix:
+  [PORTING.md](PORTING.md#lm-head-actual-cause-and-fix-2026-10-15-evening).
+- **LM head on the GPU.** Device limits as RADV reports them here
+  (`PS5LM_VK_LIMITS`): `maxStorageBufferRange` 4294967295,
+  `maxMemoryAllocationSize` and `maxBufferSize` 4294967292, no
+  `VK_EXT_shader_64bit_indexing`, shaderInt64 and buffer device address yes,
+  UMA (integrated) yes; `maxComputeWorkGroupCount` x 2^32-1, y and z 65535.
+  Run A (PID 160, eboot `ece5b335…bed4`): with ggml's op-size limit at 512 MiB
+  the output matrix went to `Vulkan0` (model buffer 497.39 MiB, 2 splits), then
+  the title's dispatch guard (65535 groups per dimension) stopped the first
+  decode: ggml-vk had dispatched the 248320-row LM-head mat-vec unsplit because
+  RADV allows 2^32-1 in x. Safe stop, closed and unmounted.
+  `test-results/ps5/PPSA99041/20261015-195314/`.
+  Run B (PID 162, eboot `cd39599d…6f82`, ggml told x ≤ 65535 so it splits into
+  z slices) **passed**: the same 32 tokens as before (first 22 equal to the CPU
+  reference, near tie at 22), 2 graph splits, LM head on `Vulkan0`, no CPU model
+  buffer. Generation 140.4 tok/s (llama's own eval timer 154 tok/s) against 7.2
+  before; prompt 98.7 tok/s against 69. Memory: load +764 MiB (cap 1152),
+  context +267 MiB (cap 384), wrapped direct memory peak 1081 MiB (cap 1536),
+  Vulkan peak 760 MiB (cap 1408), all freed. One run, not a benchmark.
+  `test-results/ps5/PPSA99041/20261015-195528/`. The unchanged repeat (PID 164)
+  gave identical tokens and memory, 139.4 tok/s:
+  `test-results/ps5/PPSA99041/20261015-195622/`.
+- **First MoE on the GPU** (Granite 3.1 1B-A400M Q4_K_M, 32 experts / 8 active,
+  pinned in [PORTING.md](PORTING.md#small-moe-decision-pin-and-budget-2026-10-15-evening)).
+  Run C (PID 166, eboot `f0786ea6…6b40`) failed safely on a build bug: the
+  MoE flag reached `main.c` (which checked the Granite file) but not the loader,
+  which loaded Qwen3.5 again (2 splits, 152 tok/s eval) and compared it with the
+  Granite reference (`model_prompt_mismatch`). Closed and unmounted.
+  `test-results/ps5/PPSA99041/20261015-200115/`.
+  Run D (PID 168, eboot `0c91055b…890a`) **passed** by the near-tie rule: the
+  first difference is at token 1, where the CPU's top two logits are 0.213
+  apart (the Metal stand-in diverged there too). A host check that forces the
+  GPU's token 1 into the CPU run gives the GPU's next 24 tokens exactly, the next
+  difference again at a near tie (0.127):
+  `test-results/local/moe-forced-continuation/20261015-200354/`. Text: "A
+  Graphics Processing Unit (GPU) and a Central Processing Unit (CPU) are two
+  distinct types of processors designed for different purposes, despite their
+  shared function of executing". 25/25 offloaded, 2 splits; `Vulkan0` 782.12 MiB
+  (all experts and the LM head), input embedding 39.38 MiB in `Vulkan_Host`.
+  Generation 160.6 tok/s (llama's eval timer 164), prompt 22 tokens at 45.5 tok/s,
+  load 9.1 s (file read). Memory: load +826 MiB (cap 1152), context +93 MiB (cap
+  384), wrapped direct memory peak 991 MiB (cap 1536), Vulkan peak 876 MiB (cap
+  1408), all freed. One run, not a benchmark.
+  `test-results/ps5/PPSA99041/20261015-200238/`. The unchanged repeat (PID 170)
+  gave identical tokens and memory, 161.2 tok/s:
+  `test-results/ps5/PPSA99041/20261015-200310/`.
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.

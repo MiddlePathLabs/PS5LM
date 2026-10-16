@@ -422,7 +422,12 @@ static const struct { const char *name; char *value; } probe_environment[] = {
     /* ggml splits model buffers below the dispatch guard's 256 MiB cap,
      * leaving room for its +32-byte host buffers and alignment. */
     {"GGML_VK_FORCE_MAX_ALLOCATION_SIZE", "251658240"},
-    {"GGML_VK_FORCE_MAX_BUFFER_SIZE", "251658240"},
+    /* max_buffer_size is used only by supports_op's tensor-size check, never
+     * for an allocation. llama's load-time probe for an output layer is a
+     * MUL_MAT with 512 rows, so a 248320-token vocabulary has a 485 MiB probe
+     * result; at 240 MiB it was rejected and the LM head went to Vulkan_Host.
+     * 512 MiB accepts it; allocations stay capped by the line above. */
+    {"GGML_VK_FORCE_MAX_BUFFER_SIZE", "536870912"},
 #endif
 };
 

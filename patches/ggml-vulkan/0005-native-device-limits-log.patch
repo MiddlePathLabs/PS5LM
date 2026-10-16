@@ -1,0 +1,25 @@
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -4551,6 +4551,22 @@
+         device->shader_int64 = device_features2.features.shaderInt64;
+         device->buffer_device_address = vk12_features.bufferDeviceAddress;
+         device->vulkan_memory_model = vk12_features.vulkanMemoryModel;
++#if defined(__PROSPERO__)
++        // One line of the limits that decide which tensors and ops this device accepts
++        // (ggml_backend_vk_device_supports_op), so a model's placement can be explained.
++        GGML_LOG_INFO("PS5LM_VK_LIMITS {\"max_memory_allocation_size\":%llu,\"max_buffer_size\":%llu,"
++                      "\"maxStorageBufferRange\":%llu,\"maxMemoryAllocationSize\":%llu,\"maxBufferSize\":%llu,"
++                      "\"suballocation_block_size\":%llu,\"shader_64b_indexing\":%d,\"shader_int64\":%d,"
++                      "\"buffer_device_address\":%d,\"uma\":%d}\n",
++                      (unsigned long long) device->max_memory_allocation_size,
++                      (unsigned long long) device->max_buffer_size,
++                      (unsigned long long) device->properties.limits.maxStorageBufferRange,
++                      (unsigned long long) props3.maxMemoryAllocationSize,
++                      (unsigned long long) (maintenance4_support ? props4.maxBufferSize : 0),
++                      (unsigned long long) device->suballocation_block_size,
++                      int(device->shader_64b_indexing), int(device->shader_int64),
++                      int(device->buffer_device_address), int(device->uma));
++#endif
+ 
+         if (device->subgroup_size_control) {
+             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;

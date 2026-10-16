@@ -1,0 +1,19 @@
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -4552,6 +4552,16 @@
+         device->buffer_device_address = vk12_features.bufferDeviceAddress;
+         device->vulkan_memory_model = vk12_features.vulkanMemoryModel;
+ #if defined(__PROSPERO__)
++        // RADV reports 2^32-1 workgroups in x, but the native title's dispatch guard
++        // allows at most 65535 per dimension. Every ggml-vk op reads this limit to
++        // split large dispatches (e.g. a 248320-row LM-head matvec goes to 64 z
++        // slices), as it does on drivers that report 65535, so report the guard's.
++        device->properties.limits.maxComputeWorkGroupCount[0] =
++            std::min<uint32_t>(device->properties.limits.maxComputeWorkGroupCount[0], 65535u);
++        GGML_LOG_INFO("PS5LM_VK_WORKGROUPS {\"maxComputeWorkGroupCount\":[%u,%u,%u]}\n",
++                      device->properties.limits.maxComputeWorkGroupCount[0],
++                      device->properties.limits.maxComputeWorkGroupCount[1],
++                      device->properties.limits.maxComputeWorkGroupCount[2]);
+         // One line of the limits that decide which tensors and ops this device accepts
+         // (ggml_backend_vk_device_supports_op), so a model's placement can be explained.
+         GGML_LOG_INFO("PS5LM_VK_LIMITS {\"max_memory_allocation_size\":%llu,\"max_buffer_size\":%llu,"

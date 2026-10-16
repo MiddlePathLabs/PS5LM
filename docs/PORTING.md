@@ -956,7 +956,7 @@ recurrent state 19.27 MiB; compute 30.63 MiB GPU + 0.31 MiB CPU; output
 |---|---|---|
 | Weights: what the model load adds, including any loader read/staging buffer the heap keeps | 1152 MiB | ledger delta across `llama_model_load_from_file`, else close with `model_weights_budget` |
 | Context: KV, recurrent state, outputs, compute buffers | 256 MiB | ledger delta across `llama_init_from_model`, else `model_context_budget` |
-| One Vulkan allocation / buffer | 256 MiB (ggml told 240 MiB) | dispatch guard; `GGML_VK_FORCE_MAX_ALLOCATION_SIZE`/`_BUFFER_SIZE` |
+| One Vulkan allocation / buffer | 256 MiB (ggml told 240 MiB) | dispatch guard; `GGML_VK_FORCE_MAX_ALLOCATION_SIZE` (from the LM-head fix on, `GGML_VK_FORCE_MAX_BUFFER_SIZE` is 512 MiB: it is only an op-size check, never an allocation; see below) |
 | All live Vulkan memory | 1408 MiB | dispatch guard, per allocation, exact per-handle frees |
 | Total wrapped direct memory (driver ring, heaps, stacks, all of the above) | **1536 MiB** | the existing ledger, per allocation |
 
@@ -1021,7 +1021,8 @@ What the two failed runs changed, each with its reason:
   SIGPIPE, and the pipeline counts as failed once the log is long. It now uses
   `klog_has`, which reads the whole log, and escapes `ProcessTerm\(\)` for `-E`.
 
-**LM head on the CPU.** ggml-vk's `supports_op` rejects a tensor larger than
+**LM head on the CPU** (the first explanation, kept for the record; it was
+wrong, see "LM head: actual cause and fix" below). ggml-vk's `supports_op` rejects a tensor larger than
 the device's `maxStorageBufferRange` (unless 64-bit indexing is available). The
 tied output matrix is 198.93 MiB, so llama places it in `Vulkan_Host` memory and
 the scheduler runs that matmul on the CPU: 24 layers on the GPU, LM head on two
@@ -1031,6 +1032,163 @@ evidence. It is probably also why generation (7.2 tok/s) is slower than the CPU-
 payload measured earlier on the Slim (13.1 tok/s, three threads): one 199 MiB
 read per token on two threads. Not measured separately. Fixing it (splitting the matmul, or 64-bit indexing) is the next step
 for speed, not for correctness.
+
+### LM head: actual cause and fix (2026-10-15, evening)
+
+**Cause.** Not `maxStorageBufferRange`: the pinned RADV reports `UINT32_MAX`
+(`.deps/PS5_Mesa/src/amd/vulkan/radv_physical_device.c:1877`; the 128 MiB value
+is the older ps5vk driver's) and `maxBufferSize`/`maxMemoryAllocationSize` are
+`0xFFFFFFFC`. The output tensor itself (Q6_K, 1024 x 248320, 208,588,800 B) is
+under every limit. What fails is the *probe op* llama builds when it picks the
+output layer's buffer type: `weight_buft_supported()` in
+`src/llama-model-loader.cpp` asks `ggml_backend_dev_supports_op` about
+`ggml_mul_mat(w, b)` with `b` = F32 `[1024, 512]`, so the probe's result is
+F32 `[248320, 512]` = 508,559,360 B (485 MiB). ggml-vk's
+`tensor_size_supported()` checks the destination as well as the sources against
+`device->max_buffer_size`, which the title forced to 251,658,240 (240 MiB) with
+`GGML_VK_FORCE_MAX_BUFFER_SIZE`. 485 MiB > 240 MiB, so Vulkan0 is refused and
+llama takes the next entry of the output layer's list, the device's host buffer
+type `Vulkan_Host`; the scheduler then runs that matmul on the CPU. llama logs
+this only at debug level ("cannot be used with preferred buffer type"), which
+the title dropped. Upstream PS5LM and the abhi245y fork set neither
+`GGML_VK_FORCE_*` variable, so their `max_buffer_size` is RADV's ~4 GiB and the
+probe passes. The Metal stand-in had 2 splits for the same reason (no such cap).
+
+**Host reproduction** (no console): a small program on the same pin builds the
+exact probe from the GGUF's tensor metadata and applies ggml-vk's size test:
+src0 208,588,800 B ok, src1 2,097,152 B ok, dst 508,559,360 B rejected at
+240 MiB, accepted at 512 MiB; the real runtime matmul at `n_ubatch` 32 is
+31,784,960 B (30.31 MiB), which is exactly the 30.57 MiB `Vulkan_Host` compute
+buffer seen on the console. Source: kept in the session scratchpad, not in the
+repo; the arithmetic is above.
+
+**Fix** (smallest): `GGML_VK_FORCE_MAX_BUFFER_SIZE` 240 MiB -> 512 MiB
+(536,870,912) in `ps5/native-compute/main.c`. In this pin `max_buffer_size` is
+read in exactly one place, `ggml_backend_vk_device_supports_op`'s size test; it
+never sizes an allocation. Allocations stay capped by
+`GGML_VK_FORCE_MAX_ALLOCATION_SIZE` (240 MiB, unchanged) and by the dispatch
+guard's 256 MiB per allocation and 1408 MiB total. 512 MiB covers a 262,144-token
+vocabulary probe at hidden size 1024 or less; a larger probe would fall back to
+`Vulkan_Host` again, safely. No llama.cpp source change. Diagnostics added for
+the console run: `patches/ggml-vulkan/0005-native-device-limits-log.patch`
+prints one `PS5LM_VK_LIMITS` line at device init (ggml's allocation/buffer
+limits, the driver's `maxStorageBufferRange`, `maxMemoryAllocationSize`,
+`maxBufferSize`, 64-bit indexing, int64, BDA, UMA); the model log filter keeps
+llama's "cannot be used with preferred buffer type" line, and the summary
+reports `host_model_buffer_mib` and `weights_moved_lines`.
+
+**Budget after the fix**, written before the run. The 198.93 MiB tied output
+moves from `Vulkan_Host` (pinned host memory, already a Vulkan allocation in the
+ledger) to `Vulkan0`; both are direct memory and both are counted by the
+dispatch guard, so the totals do not change: model buffers 497.40 MiB Vulkan0 +
+198.93 MiB CPU (input embedding for GET_ROWS) = 696 MiB, in allocations of at
+most 240 MiB (the 199 MiB tensor alone in one); the 30.3 MiB logits buffer moves
+from the `Vulkan_Host` compute buffer to the `Vulkan0` one. The previous run
+showed the weight upload needs no staging buffer (Vulkan live after load equals
+the model buffers exactly, so device memory is host-visible here). Caps unchanged:
+weights 1152 MiB, context 384 MiB, one allocation 256 MiB, Vulkan 1408 MiB,
+total 1536 MiB. Expected: `splits = 2` (CPU GET_ROWS of the input embedding,
+then everything on Vulkan0), no `CPU model buffer` line.
+
+**Correction about where the head was.** Both the input and the output layer
+fall back through the same list (`Vulkan_Host`, then `CPU`), and llama tests
+the `Vulkan_Host` entry with the Vulkan device's `supports_op`. The input
+embedding's GET_ROWS probe passes there, so the input sat in `Vulkan_Host`; the
+output's MUL_MAT probe failed there too, so the LM head sat in the plain `CPU`
+buffer. Same effect (CPU matmul), different buffer from what was written above.
+The summary field `host_model_buffer_mib` therefore reports the input
+embedding (198.93 MiB, as intended: GET_ROWS stays on the CPU).
+
+**Second limit found on the console** (run `20261015-195314`, safe stop): with
+the head on Vulkan0 the title's dispatch guard (`GROUP_DIM_LIMIT` 65535 per
+dimension, unchanged) refused a dispatch. RADV reports
+`maxComputeWorkGroupCount` = {2^32-1, 65535, 65535}, and ggml-vk only splits a
+dispatch when it exceeds that reported limit, so the 248320-row mat-vec went out
+in one x dimension. `patches/ggml-vulkan/0006-native-dispatch-group-limit.patch`
+lowers ggml's copy of the x limit to 65535 on `__PROSPERO__` only, which turns on
+ggml's existing splits (here: 64 z slices of 3880 rows); the guard now also logs
+`PS5LM_DISPATCH_LIMIT` with x/y/z if it ever fires. The driver and the guard are
+unchanged.
+
+**Result** (`20261015-195528`, repeat `20261015-195622`, eboot
+`cd39599d3edb14c77bfb7c10a542a97837dc4f5df6b3b8d1d7544ec3a51a6f82`): pass, the
+same 32 tokens as the CPU-head runs, 2 splits, generation 140 tok/s (was 7.2),
+prompt 99 tok/s (was 69), memory within every cap (see CONSOLE.md).
+
+
+### Small MoE: decision, pin and budget (2026-10-15, evening)
+
+Approved by the user through the coordinator this session (one console run and
+one repeat after the LM-head fix passed). **Model:**
+`bartowski/granite-3.1-1b-a400m-instruct-GGUF` at revision
+`940d2e1f9f65330615c7c8e980e6c5ac73d3360c`, file
+`granite-3.1-1b-a400m-instruct-Q4_K_M.gguf`, 821,847,360 bytes, SHA-256
+`3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb` (equal to the
+Hub's LFS id at that revision and to the local file). Upstream publisher
+`ibm-granite`; bartowski is a well-known quantizer. Architecture `granitemoe`:
+24 layers, 32 experts with 8 active, plain GQA attention (16 Q / 8 KV heads,
+head size 64), hidden 1024, expert FFN 512, vocabulary 49,155, tied embeddings
+(token_embd Q6_K 39.38 MiB). Expert tensors Q4_K (gate/up) and Q6_K (down).
+Chosen because ROADMAP already pinned it, it is the smallest real MoE on the
+plan, and its attention is the ordinary kind. On the console:
+`/data/PS5LM/models/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf`, uploaded with
+`scripts/ps5-put-file.py` (raw `SELF` readback SHA-256 equal;
+`test-results/local/model-upload/`).
+
+**No separate MUL_MAT_ID operator run.** ROADMAP suggested one at the real
+expert shapes first. Not done, to keep within the run limit: Q4_K `MUL_MAT_ID`
+already passed on this GPU at a small shape, the token comparison below
+exercises the real shapes in every layer, and a wrong expert result shows up as
+a token mismatch (a safe failure). If the model fails the rule, an operator
+check is the next step before any second model run.
+
+**Build.** `bash scripts/build-native-compute.sh moe` is the model mode with
+`PS5LM_MODEL_MOE` (model file, size check, prompt); everything else (settings,
+caps, guards, watchdog, close) is the same code. CPU reference:
+`PS5LM_MODEL_VARIANT=moe scripts/build-host-model-reference.sh` writes
+`build/native-moe/gen/model-reference.h`. Prompt: the same question in Granite's
+chat format, user turn only, no system turn. Reference text (host CPU,
+`test-results/local/model-reference/20261015-195935/`): "A GPU (Graphics
+Processing Unit) and a CPU (Central Processing Unit) are fundamentally different
+in their architecture, purpose, and performance characteristics. GPUs". Its
+token 1 is a near tie (CPU gap 0.213). Metal stand-in smoke of the title's
+comparison branch: 25/25 offloaded, 2 splits, first difference at token 1 (the
+near tie), rule `near_tie`, pass, coherent
+(`test-results/local/model-metal-smoke/moe-*/`). A check of the runner, not of
+the PS5 GPU.
+
+**Budget**, written before the first load. Host measurements: model buffers
+782.12 MiB GPU + 39.38 MiB input embedding (in `Vulkan_Host`, GET_ROWS on the
+CPU) = 821.5 MiB; KV 48.00 MiB (F16, 1024 tokens, 24 layers, 8 KV heads x 64);
+compute 7.69 MiB GPU + 0.31 MiB CPU; output 0.19 MiB. With the ~68 MiB of
+loader transients seen on the dense model, the load should add about 890 MiB;
+the context about 56 MiB of Vulkan memory plus llama's graph-scheduler
+bookkeeping (198 MiB for `qwen35`, sized by node count; expected smaller here).
+Caps are **unchanged** and enforced as for the dense model: weights 1152 MiB,
+context 384 MiB, one allocation 256 MiB (ggml 240 MiB), all Vulkan memory
+1408 MiB, total wrapped direct memory **1536 MiB** (an eighth of the 12 GiB
+direct budget). Same run settings: context 1024, batch = ubatch = 32, one
+sequence, two CPU threads, flash attention (FP32), F16 KV, no op offload, no
+mmap, watchdog 300 s. Largest dispatch: the 49,155-row LM head, below the
+65535-group limit without splitting. Pass rule: identical to the dense model's.
+
+**Hardware result.** A first run failed safely on a build bug (the MoE flag
+reached `main.c` but not `ggml-model.cpp`, so the title loaded Qwen and
+compared it with the Granite reference); `build-native-compute.sh` now passes
+the same flags to both and refuses a package whose objects name different model
+files. The fixed build passed (`test-results/ps5/PPSA99041/20261015-200238/`,
+repeat `…/20261015-200310/`, eboot
+`0c91055b4f425d93dce548dcc850a2273e81afe9596eae7969cb32037996890a`): rule
+`near_tie` at token 1 (CPU gap 0.213), coherent text, no NaN, 2 splits, every
+expert and the LM head on `Vulkan0`, memory within each cap (load +826 MiB,
+context +93 MiB, direct peak 991 MiB, Vulkan peak 876 MiB), 160 tok/s generation.
+Because the match is a near tie at token 1 rather than an 8-token prefix, the
+CPU reference was rerun with the GPU's token 1 forced: the CPU then produces the
+GPU's next 24 tokens exactly, and their next difference is again a near tie
+(0.127) (`test-results/local/moe-forced-continuation/20261015-200354/`). So the
+expert path (`MUL_MAT_ID`, Q4_K and Q6_K) agrees with the CPU at real shapes.
+Granite's graph-scheduler buffer is small (context +93 MiB in total), unlike
+`qwen35`'s 198 MiB.
 
 ## On the console
 

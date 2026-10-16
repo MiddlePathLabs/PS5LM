@@ -81,21 +81,30 @@ static struct {
     int offloaded = -1, offload_total = -1;
     int splits_batch = -1, splits_single = -1;
     unsigned warnings = 0, errors = 0;
+    double host_model_mib = 0;  // weights llama put in Vulkan_Host (pinned host, CPU-computed)
+    unsigned moved = 0;         // "cannot be used with preferred buffer type" lines
 } placement;
 
 static bool dropping;  // a dropped line's GGML_LOG_LEVEL_CONT pieces go too
 
 static void log_line(ggml_log_level level, const char *text, void *)
 {
-    // Debug output and the metadata dump would cost minutes of file writes.
+    // Debug output and the metadata dump would cost minutes of file writes. The one
+    // debug line that says a weight left its preferred buffer type is kept.
+    const bool moved = level != GGML_LOG_LEVEL_CONT &&
+                       std::strstr(text, "cannot be used with preferred buffer type") != nullptr;
+    if (moved) ++placement.moved;
     if (level == GGML_LOG_LEVEL_CONT ? dropping :
-        (dropping = level == GGML_LOG_LEVEL_DEBUG || std::strstr(text, "llama_model_loader: - kv") != nullptr))
+        (dropping = !moved && (level == GGML_LOG_LEVEL_DEBUG ||
+                               std::strstr(text, "llama_model_loader: - kv") != nullptr)))
         return;
     std::fputs(text, stdout);
     if (level == GGML_LOG_LEVEL_WARN) ++placement.warnings;
     if (level == GGML_LOG_LEVEL_ERROR) ++placement.errors;
     if (const char *at = std::strstr(text, "offloaded "))
         std::sscanf(at, "offloaded %d/%d", &placement.offloaded, &placement.offload_total);
+    if (const char *at = std::strstr(text, "Vulkan_Host model buffer size ="))
+        std::sscanf(at, "Vulkan_Host model buffer size = %lf", &placement.host_model_mib);
     // "graph: nodes = N, splits = S" or, when batch and single differ, "splits = S / T".
     if (const char *at = std::strstr(text, ", splits = ")) {
         if (std::sscanf(at, ", splits = %d / %d", &placement.splits_batch, &placement.splits_single) == 1)
@@ -367,11 +376,12 @@ extern "C" int ps5lm_run_ggml_ops(void)
         const double pp = r.prompt_ms > 0 ? r.prompt_tokens * 1000.0 / r.prompt_ms : 0;
         std::string ids;
         for (unsigned i = 0; i < n; ++i) ids += (i ? "," : "") + std::to_string(r.steps[i].top1);
-        char line[1536];
+        char line[2048];
         std::snprintf(line, sizeof line,
             "PS5LM_MODEL_SUMMARY {\"pass\":%s,\"rule\":\"%s\",\"generated\":%u,\"matched_prefix\":%u,"
             "\"first_diff\":%d,\"reference_gap_at_diff\":%.6f,\"nonfinite\":%u,\"longest_repeat\":%u,"
             "\"eog\":%s,\"offloaded\":%d,\"offload_total\":%d,\"splits_batch\":%d,\"splits_single\":%d,"
+            "\"host_model_buffer_mib\":%.2f,\"weights_moved_lines\":%u,"
             "\"log_warnings\":%u,\"log_errors\":%u,\"model_size_bytes\":%llu,"
             "\"weights_bytes\":%llu,\"context_bytes\":%llu,\"direct_peak_bytes\":%llu,"
             "\"vk_peak_bytes\":%llu,\"vk_live_after_free\":%llu,\"vk_errors\":%u,\"submissions\":%u,"
@@ -380,7 +390,8 @@ extern "C" int ps5lm_run_ggml_ops(void)
             pass ? "true" : "false", rule, n, matched, first_diff,
             first_diff >= 0 && unsigned(first_diff) < n ? double(ps5lm_reference_gaps[first_diff]) : -1.0,
             r.nonfinite, repeat, r.eog ? "true" : "false", placement.offloaded, placement.offload_total,
-            placement.splits_batch, placement.splits_single, placement.warnings, placement.errors,
+            placement.splits_batch, placement.splits_single, placement.host_model_mib, placement.moved,
+            placement.warnings, placement.errors,
             (unsigned long long)r.model_bytes, (unsigned long long)(r.live_model - r.live_start),
             (unsigned long long)(r.live_context - r.live_model), (unsigned long long)direct_peak(),
             r.vk_peak, vk_live(), vk_errors(), r.submissions,

@@ -5,11 +5,19 @@
 # Writes build/native-model/gen/model-reference.h. Never contacts a console.
 #
 #   scripts/build-host-model-reference.sh [MODEL.gguf]
+#   PS5LM_MODEL_VARIANT=moe scripts/build-host-model-reference.sh   # the small MoE,
+#       writes build/native-moe/gen/model-reference.h
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 llama="$root/third_party/llama.cpp"
 work="$root/build/host-llama"
-model="${1:-$root/models/Qwen3.5-0.8B-Q4_K_M.gguf}"
+variant="${PS5LM_MODEL_VARIANT:-dense}"
+case "$variant" in
+    dense) default_model="$root/models/Qwen3.5-0.8B-Q4_K_M.gguf"; out="native-model"; vflags=() ;;
+    moe) default_model="$root/models/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf"; out="native-moe"; vflags=(-DPS5LM_MODEL_MOE) ;;
+    *) echo "Unknown PS5LM_MODEL_VARIANT: $variant" >&2; exit 2 ;;
+esac
+model="${1:-$default_model}"
 [ "$(git -C "$llama" rev-parse HEAD)" = 552f18f912a32ea86edf82e2b76431cb7131538d ]
 [ -f "$model" ] || { echo "Missing model: $model" >&2; exit 2; }
 rm -rf "$work/source"
@@ -26,16 +34,16 @@ cmake -S "$work/source" -B "$work/cmake" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_OPENSSL=OFF \
     > "$work/cmake.log"
 cmake --build "$work/cmake" --target llama ggml-cpu -j 8 > "$work/build.log"
-mkdir -p "$root/build/native-model/gen"
-c++ -std=c++17 -O2 -Wall -Wextra -DPS5LM_HOST_REFERENCE \
+mkdir -p "$root/build/$out/gen"
+c++ -std=c++17 -O2 -Wall -Wextra -DPS5LM_HOST_REFERENCE ${vflags[@]+"${vflags[@]}"} \
     -I "$work/source/ggml/include" -I "$work/source/include" -I "$root/ps5/native-compute" \
     "$root/ps5/native-compute/ggml-model.cpp" \
     "$work/cmake/src/libllama.a" "$work/cmake/ggml/src/libggml.a" "$work/cmake/ggml/src/libggml-cpu.a" \
-    "$work/cmake/ggml/src/libggml-base.a" -o "$work/model-reference"
+    "$work/cmake/ggml/src/libggml-base.a" -o "$work/model-reference-$variant"
 run="$root/test-results/local/model-reference/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$run"
-header="$root/build/native-model/gen/model-reference.h"
-"$work/model-reference" "$model" "$header" > "$run/output.log" 2> "$run/llama.log"
+header="$root/build/$out/gen/model-reference.h"
+"$work/model-reference-$variant" "$model" "$header" > "$run/output.log" 2> "$run/llama.log"
 cp "$header" "$run/model-reference.h"
 python3 - "$run" "$model" <<'PY'
 import hashlib, json, pathlib, sys
