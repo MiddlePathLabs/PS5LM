@@ -246,6 +246,29 @@ remain cautionary evidence, not a validated safe budget for the Pro.
   `…/PPSA99041/20261015-203625/`, `…/api-check/20261015-203628/`. Benchmarks
   from the same windows: see "LAN API benchmarks" below.
 
+**LAN API benchmarks** (`scripts/ps5-api-bench.py`, from the Mac over the LAN
+during the server windows above). Granite 3.1 1B-A400M Q4_K_M, context 2048,
+batch = ubatch = 32, two CPU threads, one slot; prompts are the first 128 and
+512 tokens of a fixed passage, sent as token ids; 128 generated tokens
+(`ignore_eos`), temperature 0, prompt cache off; one warm-up and three
+measured requests per size. Rates are llama-server's own `timings`; wall time is
+the whole HTTP request.
+
+| Run | Prompt | Prompt tok/s, median (min–max) | Generation tok/s, median (min–max) | Wall s, median |
+|---|---|---|---|---|
+| 1 (`api-bench/20261015-203521`) | 128 | 1368 (1352–1370) | 212.3 (211.6–214.7) | 0.73 |
+| 1 | 512 | 1394 (1380–1400) | 210.0 (208.9–210.8) | 1.06 |
+| 2, repeat (`api-bench/20261015-203639`) | 128 | 1374 (1371–1385) | 211.9 (211.8–215.0) | 0.71 |
+| 2 | 512 | 1397 (1387–1399) | 209.1 (209.1–211.9) | 1.04 |
+
+The repeat's medians are within 0.5 % of the first run's (the limit set was
+about 5 %). The generation rate is higher than the model mode's 160 tok/s
+because that figure was the title's own wall clock around each token,
+including a full-vocabulary argmax and a log line per token on the CPU; the
+server's is llama's decode timer with sampling. Prompt processing at 512 tokens
+is 16 batches of 32; larger batches were not tried. These are this console's
+numbers only, for this model and these settings.
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

@@ -110,11 +110,12 @@ The test script waits for the title while you use the API, so start it in the ba
 ```sh
 scripts/ps5-native-test.sh -d build/native-server/PPSA99041 -o native-server.out -t 960 PPSA99041 &
 scripts/ps5-api-check.py --variant moe          # waits for /health, then the correctness checks
+scripts/ps5-api-bench.py --label "what changed"  # 128- and 512-token prompts, 128 tokens, 1 warm-up + 3
 curl -X POST -H 'Content-Type: application/json' -d '{}' http://$PS5_HOST:8081/ps5lm/shutdown
 wait                                            # then read test-results/ps5/PPSA99041/latest/result.json
 ```
 
-`-t 960` covers the title's 840 s watchdog. Without the shutdown request the window ends by itself after 600 s. The API is unauthenticated: it exists only while the window is open, and nothing restarts it.
+The check writes `test-results/ps5/api-check/<time>/check.json`; the benchmark writes `bench.json` and `table.md` to `test-results/ps5/api-bench/<time>/` (median, min and max of llama-server's own prompt and generation rates, and the wall time). Compare benchmarks only between runs with the same model file and settings. `-t 960` covers the title's 840 s watchdog. Without the shutdown request the window ends by itself after 600 s. The API is unauthenticated: it exists only while the window is open, and nothing restarts it.
 
 ## Common failures
 

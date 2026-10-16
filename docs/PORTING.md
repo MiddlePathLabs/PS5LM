@@ -1288,6 +1288,14 @@ or pass the model mode's rule against the CPU reference; `/v1/completions` must
 give the same text; then a chat request, a streaming chat request, the same
 completion again (identical tokens) and `/health`.
 
+**Result.** Run 1 passed on the console (`test-results/ps5/PPSA99041/20261015-203449/`,
+eboot `2303fcb0841d24da93b83f714f58a827759d46f87b8cbb826ea334ab6de22eaf`):
+the API's completion is identical to the model mode's GPU tokens, all checks
+pass, memory as budgeted (load +846 MiB, context +136 MiB, peak 1084 MiB of
+1536), Vulkan memory 0 after the server returned, closed through the verified
+route after a `/ps5lm/shutdown`. The unchanged repeat matched. Numbers in
+CONSOLE.md.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works; one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

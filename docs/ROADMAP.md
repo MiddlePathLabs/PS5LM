@@ -102,7 +102,7 @@ smaller fully resident MoE, not the earlier 27B/performance targets.
 
 **Done when** selected resident models produce correct output through the LAN API and repeatable local benchmarks are recorded.
 
-### Next on the GPU (2026-10-15; steps 0, 1 and 2 done)
+### Next on the GPU (2026-10-15; steps 0 to 3 done)
 
 Steps 0 and 1 are done; nothing for steps 2 and 3 has been run. Each step is one bounded
 `ps5-native-test.sh` run, read before the next, as the dense baseline was.
@@ -147,7 +147,15 @@ Anthropic-style system messages) moved into `patches/` after review. A server
 outlives the 300 s watchdog, so this mode needs a different liveness rule
 (health endpoint plus a bounded idle shutdown) written down before the first run.
 
-**3. Benchmarks.** In the title, not over the network first: fixed prompts of
+**3. Benchmarks: done through the API (2026-10-15, night).**
+`scripts/ps5-api-bench.py` (128- and 512-token prompts, 128 generated tokens,
+temperature 0, one warm-up and three repetitions, llama-server's own timings):
+Granite 3.1 1B-A400M at about 1370–1400 tok/s prompt and 210 tok/s generation,
+and an unchanged repeat launch within 0.5 %. See CONSOLE.md "LAN API
+benchmarks". The in-title variant below was not needed for that and is not
+done. The plan as it was written:
+
+In the title, not over the network first: fixed prompts of
 128 and 512 tokens and 64 generated tokens, three repeats after one warm-up,
 greedy, reporting prompt and generation tok/s with min/median/max and the memory
 peaks, in one `PS5LM_COMPUTE_RESULT`. Then the same through the LAN API from the
