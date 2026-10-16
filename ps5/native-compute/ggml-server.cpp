@@ -131,6 +131,27 @@ extern "C" void ps5lm_server_ready(void)
     phase("ready");
 }
 
+/* Placement, read from llama's own log lines on their way to the server's log,
+ * as the model mode reads them: all layers offloaded, and the graph splits. */
+static ggml_log_callback next_log;
+static void *next_log_data;
+static std::atomic<int> offloaded{-1}, offload_total{-1}, splits_batch{-1}, splits_single{-1};
+
+[[maybe_unused]] static void log_tap(ggml_log_level level, const char *text, void *data)
+{
+    (void)data;
+    if (level != GGML_LOG_LEVEL_CONT && text) {
+        int a = -1, b = -1;
+        if (const char *at = std::strstr(text, "offloaded "))
+            if (std::sscanf(at, "offloaded %d/%d", &a, &b) == 2) { offloaded.store(a); offload_total.store(b); }
+        if (const char *at = std::strstr(text, ", splits = ")) {
+            const int n = std::sscanf(at, ", splits = %d / %d", &a, &b);
+            if (n >= 1) { splits_batch.store(a); splits_single.store(n == 2 ? b : a); }
+        }
+    }
+    if (next_log) next_log(level, text, next_log_data);
+}
+
 /* The model mode's load settings and, apart from the context size, its context settings. */
 static void check_model_params(const char *path, const llama_model_params &params)
 {
@@ -157,6 +178,8 @@ extern "C" llama_model *__wrap_llama_model_load_from_file(const char *path, llam
 {
     if (model_loads.fetch_add(1) != 0) ps5lm_ops_fatal("server_second_model_load");
     check_model_params(path, params);
+    llama_log_get(&next_log, &next_log_data); // the server's (common) logger stays the sink
+    llama_log_set(log_tap, nullptr);
     const uint64_t before = ps5lm_direct_live_bytes();
     const uint64_t t = ps5lm_elapsed_ms();
     phase("load_begin");
@@ -169,6 +192,9 @@ extern "C" llama_model *__wrap_llama_model_load_from_file(const char *path, llam
     const uint64_t added = ps5lm_direct_live_bytes() - before;
     weights_bytes.store(added);
     if (added > PS5LM_MODEL_WEIGHTS_MIB * MiB) ps5lm_ops_fatal("model_weights_budget");
+    if (offloaded.load() < 0 || offloaded.load() != offload_total.load() ||
+        offload_total.load() != llama_model_n_layer(model) + 1)
+        ps5lm_ops_fatal("model_not_fully_offloaded");
     return model;
 }
 
@@ -311,7 +337,8 @@ extern "C" int ps5lm_run_ggml_ops(void)
             "\"errors\":%u,\"load_ms\":%llu,\"ready_ms\":%llu,\"served_ms\":%llu,\"stop_to_freed_ms\":%llu,"
             "\"weights_bytes\":%llu,\"context_bytes\":%llu,\"live_at_ready\":%llu,\"direct_peak_bytes\":%llu,"
             "\"direct_live_after_free\":%llu,\"vk_peak_bytes\":%llu,\"vk_live_after_free\":%llu,"
-            "\"vk_errors\":%u,\"submissions\":%u,\"n_ctx\":%u,\"batch\":%u}\n",
+            "\"vk_errors\":%u,\"submissions\":%u,\"n_ctx\":%u,\"batch\":%u,\"offloaded\":%d,"
+            "\"offload_total\":%d,\"splits_batch\":%d,\"splits_single\":%d}\n",
             pass ? "true" : "false", rc, reasons[reason >= 0 && reason < 4 ? reason : 0],
             responses.load(), errors.load(), (unsigned long long)load_ms.load(),
             (unsigned long long)ready_ms.load(), (unsigned long long)served_ms.load(),
@@ -319,7 +346,8 @@ extern "C" int ps5lm_run_ggml_ops(void)
             (unsigned long long)weights_bytes.load(), (unsigned long long)context_bytes.load(),
             (unsigned long long)live_at_ready.load(), (unsigned long long)ps5lm_direct_peak_bytes(),
             (unsigned long long)ps5lm_direct_live_bytes(), ps5lm_vk_memory_peak_bytes(), vk_live,
-            ps5lm_vk_memory_errors(), ps5lm_submission_count(), PS5LM_SERVER_CTX, PS5LM_SERVER_BATCH);
+            ps5lm_vk_memory_errors(), ps5lm_submission_count(), PS5LM_SERVER_CTX, PS5LM_SERVER_BATCH,
+            offloaded.load(), offload_total.load(), splits_batch.load(), splits_single.load());
         std::fputs(line, stdout);
         klog(line);
         ps5lm_flush_output();

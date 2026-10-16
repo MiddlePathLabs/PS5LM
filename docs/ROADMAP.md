@@ -152,8 +152,17 @@ outlives the 300 s watchdog, so this mode needs a different liveness rule
 temperature 0, one warm-up and three repetitions, llama-server's own timings):
 Granite 3.1 1B-A400M at about 1370–1400 tok/s prompt and 210 tok/s generation,
 and an unchanged repeat launch within 0.5 %. See CONSOLE.md "LAN API
-benchmarks". The in-title variant below was not needed for that and is not
-done. The plan as it was written:
+benchmarks". Qwen3.5 0.8B through the same server: 1744 / 1884 tok/s prompt (128 / 512
+tokens), 214 / 211 tok/s generation, tokens identical to its model mode.
+The in-title variant below was not needed for that and is not done.
+
+**Next proposals** (none started): (a) find what holds generation at
+~210 tok/s for both models: count and time the ~13 submissions per token, then
+try ggml-vk's fusion and graph optimisation, which this title switches off, one
+at a time with the token check; (b) prompt processing with larger ubatches
+(64-512) once each submit's time is known to stay far below the 10 s
+device-lost limit; (c) the next model size step under AGENTS.md's rules,
+with a written budget. The plan as it was written:
 
 In the title, not over the network first: fixed prompts of
 128 and 512 tokens and 64 generated tokens, three repeats after one warm-up,

@@ -14,7 +14,8 @@ GPU-vs-CPU rule against the CPU reference (first 8 tokens identical, or the
 first difference where the CPU's top two logits are within 0.5, no run of 8
 identical tokens); /v1/completions gives the same text; a short chat request;
 a streaming chat request; the same completion again (identical tokens) and
-/health afterwards. Writes check.json to test-results/ps5/api-check/<time>/.
+/health afterwards. Chat requests switch thinking off (Qwen3.5 would otherwise
+spend the 32 tokens reasoning; Granite's template ignores the switch). Writes check.json to test-results/ps5/api-check/<time>/.
 Only reads from the server, apart from optional --shutdown, which ends the
 title's serving window (POST /ps5lm/shutdown).
 """
@@ -188,13 +189,14 @@ def main():
             check('v1_completions_same_text', status == 200 and text == comp.get('content'), text=text)
             status, chat, _ = request(base, '/v1/chat/completions', {
                 'messages': [{'role': 'user', 'content': 'Name three primary colors. Answer in one short line.'}],
-                'max_tokens': 32, 'temperature': 0})
+                'max_tokens': 32, 'temperature': 0, 'chat_template_kwargs': {'enable_thinking': False}})
             content = (((chat or {}).get('choices') or [{}])[0].get('message') or {}).get('content') or ''
             result['chat'] = chat
             check('v1_chat', status == 200 and len(content.strip()) > 0, content=content)
             status, chunks, text, done = stream_chat(base, {
                 'messages': [{'role': 'user', 'content': 'Count from one to five in words.'}],
-                'max_tokens': 32, 'temperature': 0, 'stream': True})
+                'max_tokens': 32, 'temperature': 0, 'stream': True,
+                'chat_template_kwargs': {'enable_thinking': False}})
             check('v1_chat_stream', status == 200 and done and chunks >= 2 and text.strip(), chunks=chunks,
                   done=done, text=text)
     result['completions'] = runs

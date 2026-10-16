@@ -245,6 +245,26 @@ remain cautionary evidence, not a validated safe budget for the Pro.
   with nothing changed: identical tokens, memory and counts,
   `…/PPSA99041/20261015-203625/`, `…/api-check/20261015-203628/`. Benchmarks
   from the same windows: see "LAN API benchmarks" below.
+- **LAN API with Qwen3.5 0.8B** (build mode `server-qwen`, eboot `2b469f29…672d`;
+  from this build on the title also reads llama's placement lines in server
+  mode and closes unless every layer and the output are on the GPU). Run 3
+  (PID 176) **passed**: 25/25 offloaded, 2 graph splits; the API's 32 tokens
+  are **identical to the model mode's GPU tokens** (first 22 equal to the CPU
+  reference, as before); chat and streaming (thinking switched off), a second
+  identical completion, `/health` ok; 23 responses, 0 errors. Memory: load
+  +782 MiB, context +253 MiB (cap 384; `qwen35`'s large scheduler buffer),
+  direct peak 1126 MiB (cap 1536), Vulkan peak 746 MiB, 0 after the server
+  returned. `test-results/ps5/PPSA99041/20261015-204216/`,
+  `test-results/ps5/api-check/20261015-204219/`.
+- **Granite again with the final build** (eboot `de39308b…ec34`, the placement
+  check included). Run 4 (PID 178) **passed**: 25/25 offloaded, 2 splits,
+  identical tokens, memory and counts to runs 1 and 2.
+  `…/PPSA99041/20261015-204410/`, `…/api-check/20261015-204415/`.
+- **The window ends by itself.** Run 5 (PID 180, same build, no shutdown
+  request; one completion early on): the server stopped at the end of its
+  600 s window (`stop_reason: window`, served 600.03 s), freed in 0.1 s, and
+  the title closed 609 s after launch, well inside its 840 s watchdog; port
+  8081 closed afterwards. `test-results/ps5/PPSA99041/20261015-204458/`.
 
 **LAN API benchmarks** (`scripts/ps5-api-bench.py`, from the Mac over the LAN
 during the server windows above). Granite 3.1 1B-A400M Q4_K_M, context 2048,
@@ -260,9 +280,19 @@ the whole HTTP request.
 | 1 | 512 | 1394 (1380–1400) | 210.0 (208.9–210.8) | 1.06 |
 | 2, repeat (`api-bench/20261015-203639`) | 128 | 1374 (1371–1385) | 211.9 (211.8–215.0) | 0.71 |
 | 2 | 512 | 1397 (1387–1399) | 209.1 (209.1–211.9) | 1.04 |
+| 4, final build (`api-bench/20261015-204434`) | 128 | 1370 (1362–1391) | 212.5 (212.0–214.6) | 0.71 |
+| 4 | 512 | 1396 (1390–1407) | 210.6 (209.2–211.2) | 1.02 |
+
+Qwen3.5 0.8B Q4_K_M, same settings and script (run 3, `api-bench/20261015-204241`):
+
+| Prompt | Prompt tok/s, median (min–max) | Generation tok/s, median (min–max) | Wall s, median |
+|---|---|---|---|
+| 128 | 1744 (1736–1773) | 214.0 (212.1–214.4) | 0.68 |
+| 512 | 1884 (1863–1898) | 210.9 (210.0–211.1) | 0.92 |
 
 The repeat's medians are within 0.5 % of the first run's (the limit set was
-about 5 %). The generation rate is higher than the model mode's 160 tok/s
+about 5 %); run 4, a rebuild that only added the placement check, is within
+0.7 % of both. The generation rate is higher than the model mode's 160 tok/s
 because that figure was the title's own wall clock around each token,
 including a full-vocabulary argmax and a log line per token on the CPU; the
 server's is llama's decode timer with sampling. Prompt processing at 512 tokens

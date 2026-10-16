@@ -1296,6 +1296,27 @@ pass, memory as budgeted (load +846 MiB, context +136 MiB, peak 1084 MiB of
 route after a `/ps5lm/shutdown`. The unchanged repeat matched. Numbers in
 CONSOLE.md.
 
+**Placement check added** (after runs 1 and 2). The server's logger hides
+llama's load lines at its default verbosity, so the load wrap now puts a tap in
+front of it (`llama_log_get`/`llama_log_set`; everything is still forwarded)
+that reads `offloaded N/M` and the graph splits as the model mode does, closes
+the title with `model_not_fully_offloaded` unless all layers and the output
+layer are on the GPU, and reports both in `PS5LM_SERVER_SUMMARY`. Qwen3.5 0.8B
+(`server-qwen`, run 3) then passed with 25/25 and 2 splits and tokens identical
+to its model mode; Granite with the same build (run 4) too. Qwen's context took
++253 MiB of its 384 MiB cap, as budgeted.
+
+**Both stops verified on the console:** `POST /ps5lm/shutdown` (runs 1-4) and
+the 600 s window without any request (run 5: stopped at 600.03 s of serving,
+closed 609 s after launch).
+
+**Observation, not yet a finding.** Both models generate at about 210 tok/s
+through the server although Qwen3.5 0.8B and Granite's active 400M parameters
+differ in shape and size, and prompt processing differs (1.4k vs 1.9k tok/s).
+A per-token cost that does not depend on the model (about 13 queue
+submissions per token, each waited on; async compute, fusion and graph
+optimisation are off in this title) would explain it. Not measured yet.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works; one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).
