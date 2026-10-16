@@ -101,6 +101,8 @@ Building stays a separate step. ShadowMountPlus has no launch call ([api.md](htt
 
 An agent may run it on an already-registered title, one run at a time (`AGENTS.md`). The risk does not change: a GPU hang can stop the console answering, and only a person can recover it. What changes is that nobody may be watching, so a hang, a title that does not close or `VK_ERROR_DEVICE_LOST` ends the session until the user is back. Registering new titles, ShadowMountPlus configuration and model loads stay with the user.
 
+Vision ([PORTING.md](PORTING.md) "Vision"): `scripts/build-host-vision-reference.sh vl4b` (CPU reference, writes `build/native-vl4b/gen/`; `PS5LM_VISION_METAL=1` adds the Metal stand-in), then `bash scripts/build-native-compute.sh vl4b` and `-d build/native-vl4b/PPSA99041 -o native-model.out -t 600`. The text model and its mmproj must both be on the console.
+
 ## LAN API (server mode)
 
 `bash scripts/build-native-compute.sh server` (Granite 3.1 1B-A400M) or `… server-qwen` (Qwen3.5 0.8B) builds PPSA99041 with llama.cpp's server inside: OpenAI-compatible API on port 8081 for one bounded window (600 s, or until `POST /ps5lm/shutdown`), then it stops, frees, prints its result and closes itself ([PORTING.md](PORTING.md#lan-api-server-mode-lifetime-and-budget-2026-10-15-night)). `scripts/host-server-rehearsal.sh run 60` runs the same server code on the Mac (CPU, 127.0.0.1:8081) first.
@@ -111,6 +113,7 @@ The test script waits for the title while you use the API, so start it in the ba
 scripts/ps5-native-test.sh -d build/native-server/PPSA99041 -o native-server.out -t 960 PPSA99041 &
 scripts/ps5-api-check.py --variant moe          # waits for /health, then the correctness checks
 scripts/ps5-api-bench.py --label "what changed"  # 128- and 512-token prompts, 128 tokens, 1 warm-up + 3
+scripts/ps5-api-vision.py --model-run RUN --reference REF.json   # vision builds (server-vl4b): one image
 scripts/ps5-api-tune.py --variant dense --plan cadence   # optional: runtime knobs, each with the token check
 curl -X POST -H 'Content-Type: application/json' -d '{}' http://$PS5_HOST:8081/ps5lm/shutdown
 wait                                            # then read test-results/ps5/PPSA99041/latest/result.json

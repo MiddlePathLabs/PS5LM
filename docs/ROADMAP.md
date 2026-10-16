@@ -173,8 +173,9 @@ Tokens identical to the earlier model-mode runs. See PORTING.md "Performance".
 image embedding matched the CPU's (relative L2 0.0082) once the encoder's
 matmuls requested F32 accumulation (patch 0004), and the 47 generated
 tokens were identical to the CPU's with the right answer. See PORTING.md
-"Vision". Server mode with an image through the OpenAI API, then Qwen3-VL
-8B, follow.
+"Vision". Server mode done too: an OpenAI chat request with the image as a
+base64 data URL returns the model mode's exact tokens; image prompt 397 ms,
+113 tok/s generation (`scripts/ps5-api-vision.py`). Qwen3-VL 8B follows.
 
 **Next proposals** (none started): (a) generation is now set by GPU time per
 dispatch (~5 µs, 621 dispatches per Qwen token): find the remaining unfused

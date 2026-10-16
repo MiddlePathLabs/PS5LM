@@ -2054,6 +2054,43 @@ generation. Not done: an op-level check of conv2d/im2col, the image RoPE and
 non-causal attention by themselves; after the fix every traced tensor is
 inside tolerance in the one encode, so there was no op left to isolate.
 
+**Server mode** (`server-vl4b`; written before its first run). llama.cpp's
+server as for the text models (one slot, context 2048, physical batches of
+512, FP32 flash attention, F16 KV, no mmap, the 600 s window or
+`POST /ps5lm/shutdown`), plus `--mmproj` with the model mode's encoder
+settings (`--image-min-tokens 64 --image-max-tokens 196`, GPU, flash
+attention, warm-up; any image a client sends is resized to at most 196
+tokens). A link-time wrap of `mtmd_init_from_file` allows exactly one mmproj
+load, checks the file and these settings, and enforces the mmproj cap as
+the model mode does; patch 0004 is in the server build too. The image
+embedding is decoded in one 512-token batch (the model mode: 7 batches of
+32), so the API's tokens are checked against the model mode's GPU tokens or,
+failing that, by the model mode's rule against the CPU reference on the
+token ids the API returns (`logprobs`); the Mac's CPU rehearsal of this
+server already differs from the CPU model mode at token 10, the 0.0175 tie
+(rule `prefix`, `test-results/ps5/api-vision/20261016-083119/`).
+Budget (caps unchanged from the model mode, enforced the same way):
+
+| Part | Expected | Cap |
+|---|---|---|
+| Before the load, server threads | ~110 MiB | in the total |
+| Text weights | ~2720 MiB (model mode +2716) | 3072 |
+| Context: KV 288 MiB at 2048 + compute at 512-token batches + scheduler | ~550 MiB | 1024 |
+| Mmproj (after the context in the server) | ~1000 MiB (model mode +1000) | 1152 |
+| Serving scratch (image decode, requests) | < 64 MiB | in the total |
+| **Total direct memory** | **~4.4 GiB** | **6144 MiB** |
+
+Watchdog 180 + 600 + 60 + 60 = 900 s (`-t 1020`). Requests in the window:
+`scripts/ps5-api-vision.py` (one check with token ids, then one warm-up and
+three timed image requests of 64 tokens, prompt cache off), then the
+unchanged text benchmark `scripts/ps5-api-bench.py`, then the shutdown.
+
+**Result, server mode** (console run 3): pass. Through the OpenAI API the
+image request's 44 token ids equal the model mode's (and the CPU's), answer
+right; image prompt 397 ms (encode + decode of 224 prompt tokens),
+generation 113 tok/s; text benchmark 913 / 1171 tok/s prompt, 116 / 112
+tok/s generation; context +466 MiB, mmproj +990 MiB, peak 4382 MiB of 6144.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

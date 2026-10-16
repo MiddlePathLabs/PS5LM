@@ -528,6 +528,23 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   text 316 ms, generation 114.8 tok/s, mmproj load 9.0 s (clip reads through
   `ifstream`, i.e. `fread`), text load 2.6 s. `…/PPSA99041/20261016-082235/`.
 
+- **Run 3, Qwen3-VL 4B server mode** (`server-vl4b`, eboot `e5e4411b…7912`):
+  **pass, exit 0, closed**, 22 responses, 0 errors, stopped by
+  `/ps5lm/shutdown`. `scripts/ps5-api-vision.py`: an OpenAI chat request with
+  the test image as a base64 PNG data URL, temperature 0, prompt cache off:
+  the 44 token ids equal the model mode's GPU tokens (and the CPU's), answer
+  HELLO, 224 prompt tokens. One warm-up + three requests of 64 tokens: image
+  prompt (encode + 224-token prompt decode in one 512-token batch) 396.8 ms
+  median (396.1–398.9), generation 113.2 tok/s (112.9–113.9), wall 0.97 s.
+  The unchanged text benchmark on the same server: prompt 912.9 / 1171.3
+  tok/s (128 / 512 tokens), generation 115.7 / 112.0 tok/s. Memory: text
+  weights +2719 MiB, context +466 MiB (cap 1024), mmproj +990 MiB (cap 1152),
+  direct peak 4382 MiB (cap 6144), Vulkan peak 3915 MiB, 0 after free. Load
+  2.6 s, mmproj 9.0 s, ready 12.0 s after launch; the storage probe's
+  `fread` ran at 92.7 MB/s again (clip loads through `ifstream`, so `fread`).
+  `…/PPSA99041/20261016-083436/`, `…/api-vision/20261016-083500/`,
+  `…/api-bench/20261016-083512/`.
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

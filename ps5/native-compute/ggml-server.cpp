@@ -64,6 +64,9 @@ static uint64_t ps5lm_elapsed_ms(void)
         std::chrono::steady_clock::now() - host_start).count());
 }
 #define MODEL_PATH PS5LM_HOST_MODEL_PATH
+#if defined(PS5LM_MODEL_VISION)
+#define MMPROJ_PATH PS5LM_HOST_MMPROJ_PATH
+#endif
 /* No Vulkan on the Mac: the knobs are kept and reported, nothing reads them. */
 static std::atomic<long long> host_knobs[6] = {-1, -1, -1, -1, -1, -1};
 static const char *const host_knob_names[6] = {"disable_fusion", "disable_graph_optimize", "nodes_per_submit",
@@ -97,6 +100,12 @@ extern "C" uint64_t ps5lm_elapsed_ms(void);
 extern "C" int ps5lm_vk_set_knob(const char *name, long long value);
 extern "C" int ps5lm_vk_perf_json(char *out, size_t size);
 #define MODEL_PATH PS5LM_MODEL_PATH
+#if defined(PS5LM_MODEL_VISION)
+#define MMPROJ_PATH PS5LM_MMPROJ_PATH
+#endif
+#endif
+#if defined(PS5LM_MODEL_VISION)
+#include "mtmd.h"
 #endif
 
 int llama_server(int argc, char **argv);
@@ -110,6 +119,8 @@ static std::atomic<bool> shutdown_requested{false}, ready{false}, server_done{fa
 static std::atomic<int> server_rc{-1};
 static std::atomic<uint64_t> ready_ms{0}, served_ms{0}, stop_ms{0}, live_at_ready{0};
 static std::atomic<uint64_t> weights_bytes{0}, context_bytes{0}, load_ms{0};
+static std::atomic<uint64_t> mmproj_bytes{0}, mmproj_ms{0};
+[[maybe_unused]] static std::atomic<unsigned> mmproj_loads{0};
 /* 0 serving, 1 window ended, 2 shutdown request, 3 server returned by itself */
 static std::atomic<int> stop_reason{0};
 static const char *const reasons[] = {"serving", "window", "shutdown_request", "server_returned"};
@@ -283,6 +294,42 @@ extern "C" llama_context *__wrap_llama_init_from_model(llama_model *model, llama
 }
 #endif
 
+#if defined(PS5LM_MODEL_VISION)
+/* The one mmproj load (vision builds): the pinned file, the model mode's
+ * encoder settings (GPU, flash attention, warm-up, image tokens capped), and
+ * its cap, measured as the model mode measures it. */
+static void check_mmproj_params(const char *path, const mtmd_context_params &p)
+{
+    if (!path || std::strcmp(path, MMPROJ_PATH) != 0) ps5lm_ops_fatal("server_mmproj_path");
+    if (!p.use_gpu || p.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED || !p.warmup ||
+        p.image_min_tokens != PS5LM_VISION_MIN_TOKENS || p.image_max_tokens != PS5LM_VISION_MAX_TOKENS)
+        ps5lm_ops_fatal("server_mmproj_params");
+}
+#if !defined(PS5LM_HOST_REHEARSAL)
+extern "C" mtmd_context *__real_mtmd_init_from_file(const char *path, const llama_model *model,
+                                                    mtmd_context_params params);
+extern "C" mtmd_context *__wrap_mtmd_init_from_file(const char *path, const llama_model *model,
+                                                    mtmd_context_params params)
+{
+    if (mmproj_loads.fetch_add(1) != 0) ps5lm_ops_fatal("server_second_mmproj_load");
+    check_mmproj_params(path, params);
+    const uint64_t before = ps5lm_direct_live_bytes();
+    const uint64_t t = ps5lm_elapsed_ms();
+    phase("mmproj_begin");
+    ps5lm_flush_output();
+    mtmd_context *ctx = __real_mtmd_init_from_file(path, model, params);
+    mmproj_ms.store(ps5lm_elapsed_ms() - t);
+    phase("mmproj_end");
+    ps5lm_report_allocations();
+    if (!ctx) ps5lm_ops_fatal("mmproj_load");
+    const uint64_t added = ps5lm_direct_live_bytes() - before;
+    mmproj_bytes.store(added);
+    if (added > PS5LM_VISION_MMPROJ_MIB * MiB) ps5lm_ops_fatal("mmproj_budget");
+    return ctx;
+}
+#endif
+#endif
+
 #define STR2(x) #x
 #define STR(x) STR2(x)
 
@@ -298,6 +345,11 @@ static const char *const args[] = {
     "-lm", "none", "-lzm", "off", "-fit", "off",
     "--no-webui", "--cache-ram", "0", "--ctx-checkpoints", "0",
     "--threads-http", PS5LM_SERVER_HTTP_THREADS, "--log-colors", "off",
+#if defined(PS5LM_MODEL_VISION)
+    /* The encoder on the GPU, image tokens capped as in the model mode. */
+    "--mmproj", MMPROJ_PATH, "--image-min-tokens", STR(PS5LM_VISION_MIN_TOKENS),
+    "--image-max-tokens", STR(PS5LM_VISION_MAX_TOKENS),
+#endif
 };
 
 static std::vector<char *> server_argv()
@@ -319,6 +371,12 @@ static void rehearse_params()
     llama_model_params mp = common_model_params_to_llama(params);
     check_model_params(params.model.path.c_str(), mp);
     check_context_params(common_context_params_to_llama(params));
+#if defined(PS5LM_MODEL_VISION)
+    if (params.mmproj.path != MMPROJ_PATH || !params.mmproj_use_gpu || params.image_min_tokens != PS5LM_VISION_MIN_TOKENS ||
+        params.image_max_tokens != PS5LM_VISION_MAX_TOKENS || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
+        !params.warmup)
+        ps5lm_ops_fatal("server_mmproj_params");
+#endif
     std::fprintf(stderr, "PS5LM_HOST_PARAMS ok\n");
 }
 #endif
@@ -532,14 +590,15 @@ extern "C" int ps5lm_run_ggml_ops(void)
         const unsigned long long vk_live = ps5lm_vk_memory_live_bytes();
         const bool pass = rc == 0 && (reason == 1 || reason == 2) && errors.load() == 0 &&
                           responses.load() > 0 && ps5lm_vk_memory_errors() == 0;
-        char line[1024];
+        char line[1536];
         std::snprintf(line, sizeof line,
             "PS5LM_SERVER_SUMMARY {\"pass\":%s,\"server_rc\":%d,\"stop_reason\":\"%s\",\"responses\":%u,"
             "\"errors\":%u,\"load_ms\":%llu,\"ready_ms\":%llu,\"served_ms\":%llu,\"stop_to_freed_ms\":%llu,"
             "\"weights_bytes\":%llu,\"context_bytes\":%llu,\"live_at_ready\":%llu,\"direct_peak_bytes\":%llu,"
             "\"direct_live_after_free\":%llu,\"vk_peak_bytes\":%llu,\"vk_live_after_free\":%llu,"
             "\"vk_errors\":%u,\"submissions\":%u,\"n_ctx\":%u,\"batch\":%u,\"offloaded\":%d,"
-            "\"offload_total\":%d,\"splits_batch\":%d,\"splits_single\":%d}\n",
+            "\"offload_total\":%d,\"splits_batch\":%d,\"splits_single\":%d,\"mmproj_bytes\":%llu,"
+            "\"mmproj_ms\":%llu}\n",
             pass ? "true" : "false", rc, reasons[reason >= 0 && reason < 4 ? reason : 0],
             responses.load(), errors.load(), (unsigned long long)load_ms.load(),
             (unsigned long long)ready_ms.load(), (unsigned long long)served_ms.load(),
@@ -548,7 +607,8 @@ extern "C" int ps5lm_run_ggml_ops(void)
             (unsigned long long)live_at_ready.load(), (unsigned long long)ps5lm_direct_peak_bytes(),
             (unsigned long long)ps5lm_direct_live_bytes(), ps5lm_vk_memory_peak_bytes(), vk_live,
             ps5lm_vk_memory_errors(), ps5lm_submission_count(), PS5LM_SERVER_CTX, PS5LM_SERVER_BATCH,
-            offloaded.load(), offload_total.load(), splits_batch.load(), splits_single.load());
+            offloaded.load(), offload_total.load(), splits_batch.load(), splits_single.load(),
+            (unsigned long long)mmproj_bytes.load(), (unsigned long long)mmproj_ms.load());
         std::fputs(line, stdout);
         klog(line);
         ps5lm_flush_output();

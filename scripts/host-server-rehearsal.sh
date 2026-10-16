@@ -8,7 +8,7 @@
 #   scripts/host-server-rehearsal.sh [build]          build only
 #   scripts/host-server-rehearsal.sh run [WINDOW]     build, then serve (default 60 s)
 #   PS5LM_MODEL_VARIANT=dense ...                     Qwen3.5 0.8B instead of Granite
-#   (also moe3b, olmoe, qwen3moe: the MoE climb)
+#   (also moe3b, olmoe, qwen3moe: the MoE climb; vl4b, vl8b: vision, with the mmproj)
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 llama="$root/third_party/llama.cpp"
@@ -22,6 +22,11 @@ case "$variant" in
     moe3b) model="$root/models/granite-3.1-3b-a800m-instruct-Q4_K_M.gguf"; vflags=(-DPS5LM_MODEL_GRANITE3B) ;;
     olmoe) model="$root/models/OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf"; vflags=(-DPS5LM_MODEL_OLMOE) ;;
     qwen3moe) model="$root/models/Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf"; vflags=(-DPS5LM_MODEL_QWEN3MOE) ;;
+    # Vision (docs/PORTING.md "Vision"): the text model and its mmproj.
+    vl4b) model="$root/models/Qwen3VL-4B-Instruct-Q4_K_M.gguf"; vflags=(-DPS5LM_MODEL_QWEN3VL4B
+          "-DPS5LM_HOST_MMPROJ_PATH=\"$root/models/mmproj-Qwen3VL-4B-Instruct-F16.gguf\"") ;;
+    vl8b) model="$root/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"; vflags=(-DPS5LM_MODEL_QWEN3VL8B
+          "-DPS5LM_HOST_MMPROJ_PATH=\"$root/models/mmproj-Qwen3VL-8B-Instruct-F16.gguf\"") ;;
     *) echo "Unknown PS5LM_MODEL_VARIANT: $variant" >&2; exit 2 ;;
 esac
 [ "$(git -C "$llama" rev-parse HEAD)" = 552f18f912a32ea86edf82e2b76431cb7131538d ]
@@ -51,7 +56,7 @@ done
 c++ -std=c++17 -O2 -Wall -Wextra -DPS5LM_HOST_REHEARSAL ${vflags[@]+"${vflags[@]}"} \
     -DPS5LM_HOST_MODEL_PATH="\"$model\"" -DPS5LM_SERVER_HOST='"127.0.0.1"' \
     -DPS5LM_SERVER_WINDOW_S="${window}u" \
-    -I "$work/source/ggml/include" -I "$work/source/include" -I "$work/source/common" \
+    -I "$work/source/ggml/include" -I "$work/source/include" -I "$work/source/common" -I "$work/source/tools/mtmd" \
     -I "$root/ps5/native-compute" "$root/ps5/native-compute/ggml-server.cpp" \
     "${libs[@]}" -framework Foundation -o "$work/server-rehearsal-$variant"
 echo "Built $work/server-rehearsal-$variant"
