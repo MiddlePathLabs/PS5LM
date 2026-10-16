@@ -567,6 +567,13 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   launch. `…/PPSA99041/20261016-085508/`, `…/api-vision/20261016-085537/`,
   `…/api-bench/20261016-085545/`.
 
+- **Run 6, Qwen3-VL 8B model mode, unchanged repeat** (eboot `bc9cae82…9004`,
+  left deployed): **pass, exit 0, closed**; embedding statistics, the 47
+  tokens, memory (peak 6458 MiB) and 5342 submissions identical to run 4;
+  encode 289 ms, 80.2 tok/s. `…/PPSA99041/20261016-085658/`. Console
+  answering afterwards (FTP, klog, Payload Manager, ShadowMountPlus), port
+  8081 closed, PPSA99041 unmounted.
+
 | Vision (one 448 x 448 image, 196 image tokens) | Embedding rel. L2 vs CPU | Tokens vs CPU | Encode (model mode) | Image prompt via API | Generation model / API | Peak / cap |
 |---|---|---|---|---|---|---|
 | Qwen3-VL 4B Q4_K_M + F16 mmproj | 0.0082 | identical (47) | 231 ms | 397 ms | 114.8 / 113.2 tok/s | 4382 / 6144 MiB |
