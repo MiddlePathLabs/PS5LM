@@ -323,6 +323,25 @@ run and one server-mode run with the benchmark.
   Benchmark (`…/api-bench/20261015-211113/`), medians (min–max): 128-token
   prompt 711 (707–721) tok/s, generation 149.5 (148.7–149.7) tok/s; 512-token
   prompt 709 (707–713) tok/s, generation 146.4 (146.2–147.5) tok/s.
+- **Step 2, OLMoE-1B-7B-0125-Instruct Q4_K_M (total cap 6144 MiB): pass.**
+  Model mode (PID 187, eboot `eaec7392…9326`): the first 25 greedy tokens equal
+  the CPU reference; the first difference is at token 25 (CPU gap 0.241); text
+  "A GPU (Graphics Processing Unit) and a CPU (Central Processing Unit) are both
+  essential components in computers, but they serve distinct purposes and are
+  designed with different". 17/17 offloaded, 2 splits (`Vulkan0` 3961.35 MiB,
+  input embedding 55.27 MiB in `Vulkan_Host`). Load 45.6 s (about 92 MB/s),
+  weights +4022 MiB (cap 4608), context +166 MiB (cap 512), direct peak
+  4257 MiB (cap 6144), Vulkan peak 4152 MiB, 0 after free; 4437 submissions;
+  generation 175.6 tok/s on the title's clock, prompt 56 tok/s. One llama
+  warning: the GGUF's own "special_eos_id is not in special_eog_ids" note,
+  printed on the CPU too. `test-results/ps5/PPSA99041/20261015-212150/`.
+  Server mode (PID 189, eboot `1f4e572d…7065`): API check 9/9, completion
+  identical to the model mode's; load 45.6 s, weights +4042 MiB, context
+  +292 MiB at 2048 tokens, direct peak 4432 MiB, Vulkan peak 4278 MiB, 0 after
+  free, 23 responses, 0 errors. `…/PPSA99041/20261015-212307/`,
+  `…/api-check/20261015-212310/`. Benchmark (`…/api-bench/20261015-212407/`):
+  128-token prompt 614.5 (613–624) tok/s, generation 232.4 (230.8–232.7) tok/s;
+  512-token prompt 570.9 (568–573) tok/s, generation 223.1 (222.4–225.8) tok/s.
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.

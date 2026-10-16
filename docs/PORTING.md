@@ -1410,6 +1410,40 @@ check 9/9 with tokens identical to the model mode, weights +2005 MiB, context
 +184 MiB, peak 2294 MiB; 711/709 tok/s prompt, 149.5/146.4 tok/s generation.
 Largest passing total is now **3072 MiB**, so step 2 may be at most 6144 MiB.
 
+#### Step 2: OLMoE-1B-7B-0125-Instruct, total 6144 MiB
+
+Written before its first run. Host CPU reference
+(`test-results/local/model-reference/20261015-210636/`): model buffer
+4016.62 MiB (untied output 80.60 MiB Q6_K; input embedding 55.27 MiB Q4_K,
+expected in `Vulkan_Host`), KV 128.00 MiB (1024 cells, 16 layers, 16 KV heads
+x 128, F16), compute 6.64 MiB; text "A GPU (Graphics Processing Unit) and a CPU
+(Central Processing Unit) are both essential components in computers, but they
+serve different purposes and are designed with distinct"; prompt 27 tokens
+(OLMoE's template: `<|endoftext|><|user|>\n…\n<|assistant|>\n`; its `<|user|>`
+markers are plain text in this vocabulary); smallest top-two gap 0.241 at
+token 25, none under 1.19 in the first 8.
+
+| Part | Expected | Cap | Enforced by |
+|---|---|---|---|
+| Before the load | ~70 MiB | in the total | ledger |
+| Weights | ~4030 MiB | 4608 MiB | as step 1 |
+| Context, model mode (KV 128) | ~180 MiB | 512 MiB | as step 1 |
+| Context, server mode (KV 256 at 2048) | ~310 MiB | 512 MiB | as step 1 |
+| All Vulkan memory | ~4.3 GiB | 5120 MiB | dispatch guard |
+| **Total direct memory** | **~4.4 GiB** | **6144 MiB** | ledger |
+
+Queue submissions in the model mode: 16,384 (expected ~4,700). Load at the
+measured ~95 MB/s: ~45 s; model-mode watchdog 300 s, server load deadline
+180 s (watchdog 900 s, so `ps5-native-test.sh -t 1020`).
+
+**Result: pass** (console runs 3 and 4). Model mode: rule `prefix` (first 25
+tokens equal, then the 0.241 near tie), 17/17, 2 splits, load 45.6 s, weights
++4022 MiB, context +166 MiB, direct peak 4257 MiB, 4437 submissions. Server
+mode: 9/9, tokens identical to the model mode, weights +4042 MiB, context
++292 MiB, peak 4432 MiB; 614/571 tok/s prompt, 232/223 tok/s generation.
+Largest passing total is now **6144 MiB**; step 3 may be at most 12,288 MiB,
+and the device-memory rule holds it to 10,649 MiB.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works; one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).
