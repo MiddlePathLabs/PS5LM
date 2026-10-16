@@ -4,7 +4,64 @@
  */
 #ifndef PS5LM_GGML_MODEL_H
 #define PS5LM_GGML_MODEL_H
-#if defined(PS5LM_MODEL_QWEN3MOE)
+#if defined(PS5LM_MODEL_QWEN3VL4B) || defined(PS5LM_MODEL_QWEN3VL8B)
+/* Vision (build modes "vl4b", "server-vl4b", "vl8b", "server-vl8b"; docs/PORTING.md
+ * "Vision"): a Qwen3-VL text model plus its mmproj, one fixed image
+ * (testdata/vision/hello-shapes-448.png, 448 x 448: 196 image tokens at patch 16,
+ * merge 2), the image tokens capped so the encoder's warm-up and compute stay
+ * at that size. Runner: ggml-vision.cpp (model mode), ggml-server.cpp (server). */
+#define PS5LM_MODEL_VISION 1
+#define PS5LM_VISION_IMAGE_SIDE 448
+#define PS5LM_VISION_MIN_TOKENS 64
+#define PS5LM_VISION_MAX_TOKENS 196
+#define PS5LM_VISION_PROMPT "<|im_start|>user\n<__media__>Describe this image in one sentence. " \
+    "Then answer: what word is written in the image?<|im_end|>\n<|im_start|>assistant\n"
+/* The text-only prompt (unused by the vision runner; kept for tools that expect one). */
+#define PS5LM_MODEL_PROMPT "<|im_start|>user\nIn a short paragraph, explain how a GPU differs " \
+    "from a CPU.<|im_end|>\n<|im_start|>assistant\n"
+#define PS5LM_VISION_ANSWER "HELLO"
+/* Image embedding tolerance, GPU against the host CPU, fixed before the first
+ * console run from the Mac's Metal stand-in (docs/PORTING.md "Vision"; Metal:
+ * rel L2 0.0106, cosine 0.99994, one token of 196 at 0.957, the next 0.9987):
+ * relative L2 error over the whole embedding, its cosine similarity, and at
+ * most 2 image tokens (1 %) whose own cosine similarity is below 0.995. */
+#define PS5LM_VISION_TOL_REL_L2 0.03
+#define PS5LM_VISION_TOL_COS 0.9995
+#define PS5LM_VISION_TOL_TOKEN_COS 0.995
+#define PS5LM_VISION_TOL_TOKENS_BELOW 2
+#define PS5LM_MODEL_PREDICT 64u
+#if defined(PS5LM_MODEL_QWEN3VL8B)
+/* Qwen/Qwen3-VL-8B-Instruct-GGUF (pin in docs/PORTING.md "Vision"). */
+#define PS5LM_GGML_WORKLOAD "model-vl8b-greedy"
+#define PS5LM_MODEL_FILE "Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+#define PS5LM_MODEL_BYTES 0ull /* set with the pin */
+#define PS5LM_MMPROJ_FILE "mmproj-Qwen3VL-8B-Instruct-F16.gguf"
+#define PS5LM_MMPROJ_BYTES 0ull /* set with the pin */
+#else
+/* Qwen/Qwen3-VL-4B-Instruct-GGUF @ 1cd86afb9a95c410a6038ab3b40d8b578c892266 */
+#define PS5LM_GGML_WORKLOAD "model-vl4b-greedy"
+#define PS5LM_MODEL_FILE "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+#define PS5LM_MODEL_BYTES 2497281664ull
+#define PS5LM_MMPROJ_FILE "mmproj-Qwen3VL-4B-Instruct-F16.gguf"
+#define PS5LM_MMPROJ_BYTES 836180256ull
+/* Budget (docs/PORTING.md "Vision"), MiB. Weights: the text model's GPU
+ * buffers (2376, with the tied 304 MiB Q6_K output) plus the input embedding's
+ * Vulkan_Host copy (304) plus loader transients. Mmproj: 797 MiB of F16/F32
+ * encoder weights, the encoder's compute buffer at 196 tokens, read buffer. */
+#define PS5LM_MODEL_WEIGHTS_MIB 3072u
+#define PS5LM_VISION_MMPROJ_MIB 1152u
+#define PS5LM_MODEL_CONTEXT_MIB 1024u
+#define PS5LM_MODEL_TOTAL_MIB 6144u
+/* The tied output matrix is one 304.3 MiB tensor: ggml's allocations go up to
+ * 320 MiB, the dispatch guard's to 336 MiB (256 / 240 for the other models). */
+#define PS5LM_MODEL_GPU_ALLOCATION_MIB 336u
+#define PS5LM_MODEL_VK_MAX_ALLOCATION "335544320"
+#endif
+#define PS5LM_MMPROJ_PATH "/data/PS5LM/models/" PS5LM_MMPROJ_FILE
+#define PS5LM_MODEL_SUBMIT_LIMIT 16384u
+#define PS5LM_MODEL_WATCHDOG_S 300u
+#define PS5LM_MODEL_SERVER_LOAD_S 180u
+#elif defined(PS5LM_MODEL_QWEN3MOE)
 /* Step 3 of the MoE climb (build modes "qwen3moe", "server-qwen3moe"; docs/PORTING.md
  * "Larger MoE models"). bartowski/Qwen_Qwen3-30B-A3B-Instruct-2507-GGUF
  * @ 6c6e8692f43e4ca663f7ece8229a1361090d3a4c */
@@ -79,7 +136,9 @@
     "from a CPU.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 #endif
 #define PS5LM_MODEL_PATH "/data/PS5LM/models/" PS5LM_MODEL_FILE
+#ifndef PS5LM_MODEL_PREDICT
 #define PS5LM_MODEL_PREDICT 32u
+#endif
 #define PS5LM_MODEL_CTX 1024u
 #define PS5LM_MODEL_BATCH 32u
 #define PS5LM_MODEL_THREADS 2
@@ -99,7 +158,13 @@
 #define PS5LM_MODEL_WATCHDOG_S 300u
 #define PS5LM_MODEL_SERVER_LOAD_S 120u
 #endif
+#ifndef PS5LM_MODEL_GPU_ALLOCATION_MIB
 #define PS5LM_MODEL_GPU_ALLOCATION_MIB 256u
+#define PS5LM_MODEL_VK_MAX_ALLOCATION "251658240"
+#endif
+#ifndef PS5LM_VISION_MMPROJ_MIB
+#define PS5LM_VISION_MMPROJ_MIB 0u /* text models: no mmproj */
+#endif
 /* Pass rule (docs/PORTING.md): first 8 tokens identical, or the first
  * difference falls where the CPU's top two logits are within this gap. */
 #define PS5LM_MODEL_PREFIX 8u

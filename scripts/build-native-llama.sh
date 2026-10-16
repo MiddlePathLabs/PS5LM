@@ -50,6 +50,8 @@ cmake -S "$work/source" -B "$work/cmake" -G Ninja \
 targets=(llama ggml-vulkan ggml-cpu)
 if [ "${PS5LM_LLAMA_SERVER:-0}" = 1 ]; then
     targets+=(llama-server-impl server-context llama-common llama-common-base mtmd llama-ui cpp-httplib vendor-hash)
+elif [ "${PS5LM_LLAMA_MTMD:-0}" = 1 ]; then
+    targets+=(mtmd vendor-hash)   # the vision model mode: libmtmd only (docs/PORTING.md "Vision")
 fi
 cmake --build "$work/cmake" --target "${targets[@]}" -j 4
 python3 - "$root" "$work" <<'PY'
@@ -60,6 +62,8 @@ libraries = [work / 'cmake/src/libllama.a', *sorted((work / 'cmake/ggml/src').rg
 if os.environ.get('PS5LM_LLAMA_SERVER') == '1':  # the server mode's extra libraries
     libraries += sorted(p for p in (work / 'cmake').rglob('*.a')
                         if p.parent.name in ('server', 'common', 'ui', 'mtmd', 'cpp-httplib', 'hash'))
+elif os.environ.get('PS5LM_LLAMA_MTMD') == '1':  # the vision model mode's
+    libraries += sorted(p for p in (work / 'cmake').rglob('*.a') if p.parent.name in ('mtmd', 'hash'))
 shaders = sorted((work / 'cmake/ggml/src/ggml-vulkan/vulkan-shaders.spv').glob('*.spv'))
 if not shaders:
     raise SystemExit('No host-generated Vulkan shaders')

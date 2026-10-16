@@ -18,7 +18,9 @@ case "$mode" in
     server-moe3b|server-olmoe|server-qwen3moe) work="$root/build/native-$mode" ;;
     # SSD streaming (docs/PORTING.md "SSD streaming"): the storage/mmap/CPU probe.
     stream-probe) work="$root/build/native-$mode" ;;
-    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen|moe3b|olmoe|qwen3moe|server-moe3b|server-olmoe|server-qwen3moe|stream-probe]" >&2; exit 2 ;;
+    # Vision (docs/PORTING.md "Vision"): Qwen3-VL text model + mmproj, model mode and server mode.
+    vl4b|vl8b|server-vl4b|server-vl8b) work="$root/build/native-$mode" ;;
+    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen|moe3b|olmoe|qwen3moe|server-moe3b|server-olmoe|server-qwen3moe|stream-probe|vl4b|vl8b|server-vl4b|server-vl8b]" >&2; exit 2 ;;
 esac
 # Which model a model or server build loads: its define and its file (checked below).
 variant_flag=(); want=Qwen3.5-0.8B-Q4_K_M.gguf
@@ -28,10 +30,14 @@ case "$mode" in
     olmoe|server-olmoe) variant_flag=(-DPS5LM_MODEL_OLMOE); want=OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf ;;
     stream-probe) variant_flag=(-DPS5LM_MODEL_OLMOE -DPS5LM_STREAM_PROBE); want=OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf ;;
     qwen3moe|server-qwen3moe) variant_flag=(-DPS5LM_MODEL_QWEN3MOE); want=Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf ;;
+    vl4b|server-vl4b) variant_flag=(-DPS5LM_MODEL_QWEN3VL4B); want=Qwen3VL-4B-Instruct-Q4_K_M.gguf ;;
+    vl8b|server-vl8b) variant_flag=(-DPS5LM_MODEL_QWEN3VL8B); want=Qwen3VL-8B-Instruct-Q4_K_M.gguf ;;
 esac
+vision=0
+case "$mode" in vl4b|vl8b|server-vl4b|server-vl8b) vision=1 ;; esac
 model_files=(Qwen3.5-0.8B-Q4_K_M.gguf granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
     granite-3.1-3b-a800m-instruct-Q4_K_M.gguf OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf
-    Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf)
+    Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf Qwen3VL-4B-Instruct-Q4_K_M.gguf Qwen3VL-8B-Instruct-Q4_K_M.gguf)
 app="$work/PPSA99041"
 sdk="${PS5_NATIVE_SDK:-$upstream/.deps/native/ps5-payload-sdk}"
 archive="${RADV_ARCHIVE:-$root/build/radv-preflight/radv-release/src/amd/vulkan/libvulkan_radeon.a}"
@@ -104,9 +110,10 @@ compile_flags=()
 server=0
 case "$mode" in server*) server=1 ;; esac
 model_mode=0
-case "$mode" in model|moe|moe3b|olmoe|qwen3moe|stream-probe) model_mode=1 ;; esac
+case "$mode" in model|moe|moe3b|olmoe|qwen3moe|stream-probe|vl4b|vl8b) model_mode=1 ;; esac
 if [ "$mode" != compute ]; then
-    PS5LM_LLAMA_SERVER=$server PS5_NATIVE_SDK="$sdk" RADV_ARCHIVE="$archive" bash "$root/scripts/build-native-llama.sh"
+    PS5LM_LLAMA_SERVER=$server PS5LM_LLAMA_MTMD=$vision PS5_NATIVE_SDK="$sdk" RADV_ARCHIVE="$archive" \
+        bash "$root/scripts/build-native-llama.sh"
     llama="$root/build/native-llama"
     compile_flags+=(-DPS5LM_GGML_OPS)
     runner=ggml-ops
@@ -118,6 +125,23 @@ if [ "$mode" != compute ]; then
         # No model load, so no CPU reference; the probe reads the OLMoE and Qwen3 files.
         compile_flags+=(-DPS5LM_GGML_MODEL ${variant_flag[@]+"${variant_flag[@]}"})
         runner=ggml-stream-probe
+    elif [ "$vision" = 1 ]; then
+        # The CPU reference comes first: scripts/build-host-vision-reference.sh writes
+        # the reference headers and the raw embedding/trace files the runner embeds.
+        for f in model-reference.h vision-reference.h vision-embd-ref.bin vision-trace-ref.bin; do
+            [ -f "$work/gen/$f" ] || { echo "Missing $work/gen/$f" >&2; exit 2; }
+        done
+        python3 - "$root/testdata/vision/hello-shapes-448.png" "$work/gen/vision-image.h" <<'PY'
+import sys
+data = open(sys.argv[1], 'rb').read()
+rows = ',\n'.join(','.join(str(b) for b in data[i:i + 32]) for i in range(0, len(data), 32))
+open(sys.argv[2], 'w').write('/* testdata/vision/hello-shapes-448.png, generated; do not edit. */\n'
+                             f'static const unsigned char ps5lm_vision_png[{len(data)}] = {{\n{rows}\n}};\n')
+PY
+        compile_flags+=(-DPS5LM_GGML_MODEL ${variant_flag[@]+"${variant_flag[@]}"}
+            "-DPS5LM_VISION_EMBD_BIN=\"$work/gen/vision-embd-ref.bin\""
+            "-DPS5LM_VISION_TRACE_BIN=\"$work/gen/vision-trace-ref.bin\"")
+        runner=ggml-vision
     elif [ "$model_mode" = 1 ]; then
         # The CPU reference comes first: scripts/build-host-model-reference.sh.
         [ -f "$work/gen/model-reference.h" ] || { echo "Missing $work/gen/model-reference.h" >&2; exit 2; }
@@ -127,7 +151,7 @@ if [ "$mode" != compute ]; then
     compile -std=c11 ${compile_flags[@]+"${compile_flags[@]}"} -I "$mesa/include" -I "$root/ps5/native-compute" \
         -c "$root/ps5/native-compute/ggml-dispatch.c" -o "$work/obj/ggml-dispatch.o"
     compile -std=c++17 -fexceptions -frtti ${compile_flags[@]+"${compile_flags[@]}"} \
-        -I "$llama/source/ggml/include" -I "$llama/source/include" \
+        -I "$llama/source/ggml/include" -I "$llama/source/include" -I "$llama/source/tools/mtmd" \
         -I "$root/ps5/native-compute" -I "$work/gen" \
         -c "$root/ps5/native-compute/$runner.cpp" -o "$work/obj/$runner.o"
     extra_objects+=("$work/obj/ggml-dispatch.o" "$work/obj/$runner.o")
@@ -141,6 +165,9 @@ if [ "$mode" != compute ]; then
             "$llama/cmake/common/libllama-common-base.a" "$llama/cmake/tools/mtmd/libmtmd.a"
             "$llama/cmake/tools/ui/libllama-ui.a" "$llama/cmake/vendor/cpp-httplib/libcpp-httplib.a"
             "$llama/cmake/vendor/hash/libvendor-hash.a")
+    fi
+    if [ "$vision" = 1 ] && [ "$server" = 0 ]; then
+        server_libraries=("$llama/cmake/tools/mtmd/libmtmd.a" "$llama/cmake/vendor/hash/libvendor-hash.a")
     fi
     extra_libraries+=(--start-group ${server_libraries[@]+"${server_libraries[@]}"} "$llama/cmake/src/libllama.a" "$llama/cmake/ggml/src/libggml.a"
         "$llama/cmake/ggml/src/libggml-cpu.a" "$llama/cmake/ggml/src/ggml-vulkan/libggml-vulkan.a"
@@ -177,6 +204,8 @@ net_compat=(getaddrinfo freeaddrinfo getnameinfo accept4 isatty getpwuid timegm 
 if [ "$server" = 1 ]; then
     # ggml-server.cpp checks the one model load and the one context, and their caps.
     radv_link_flags+=(--wrap=llama_model_load_from_file --wrap=llama_init_from_model)
+    # Vision: the one mmproj load, its file and its cap.
+    if [ "$vision" = 1 ]; then radv_link_flags+=(--wrap=mtmd_init_from_file); fi
     # The platform's resolver refuses every lookup; net-compat.c's numeric one
     # replaces it, and binds the other names the server needs (all kept local).
     kept=()

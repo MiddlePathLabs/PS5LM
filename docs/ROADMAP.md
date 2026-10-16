@@ -168,6 +168,14 @@ model file. Qwen3.5 0.8B: prompt 1744/1884 → 3147/5264 tok/s, generation
 load 45.6 → 3.6 s; Granite 1B generation 212 → 345, Granite 3B 150 → 237.
 Tokens identical to the earlier model-mode runs. See PORTING.md "Performance".
 
+**5. Vision: Qwen3-VL 4B model mode done (2026-10-16).** One fixed
+448 x 448 synthetic image, mmproj on the GPU through llama.cpp's mtmd; the
+image embedding matched the CPU's (relative L2 0.0082) once the encoder's
+matmuls requested F32 accumulation (patch 0004), and the 47 generated
+tokens were identical to the CPU's with the right answer. See PORTING.md
+"Vision". Server mode with an image through the OpenAI API, then Qwen3-VL
+8B, follow.
+
 **Next proposals** (none started): (a) generation is now set by GPU time per
 dispatch (~5 µs, 621 dispatches per Qwen token): find the remaining unfused
 op chains in ggml-vk for these graphs and fuse or batch them; (b) Qwen3-30B

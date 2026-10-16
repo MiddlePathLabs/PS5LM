@@ -491,6 +491,43 @@ one used):
   The script's `-t` should exceed the title's watchdog by a minute, so a
   watchdog close can still be observed (here both were 300 s).
 
+**Recovery check, 2026-10-16 07:54** (by the user after the hang above:
+reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
+(`354b6fb4…cc00`) passed and closed, `…/PPSA99041/20261016-075431/`.
+
+**Vision, 2026-10-16** (PORTING.md "Vision"; at most 10 runs):
+
+- **Run 1, Qwen3-VL 4B model mode** (`vl4b`, eboot `d09eab01…35cd`, total
+  cap 6144 MiB): **fail by the embedding tolerance, closed, exit 1.** Text:
+  first 10 tokens equal to the CPU's, the difference at the 0.0175 tie (rule
+  `prefix`), 44 tokens, answer HELLO right, shapes right; 37/37 on the GPU, 2
+  splits; the encoder graph in 1 split (766 nodes, nothing on the CPU).
+  Image embedding against the CPU: relative L2 0.070 (tolerance 0.03),
+  cosine 0.99766 (0.9995), 31 of 196 tokens below 0.995, max abs 1.10. The
+  trace pass (one more encode) put the first tensor over tolerance at layer
+  0's `ffn_out` (0.034; Metal 0.001), with every matmul output 5–30x worse
+  than Metal's and the error at 0.03–0.11 through the layers. Memory as
+  budgeted: text weights +2716 MiB (cap 3072), mmproj +1000 MiB (1152),
+  context +227 MiB (1024), direct peak 4031 MiB (6144), Vulkan peak 3676 MiB,
+  0 after free. Load 2.6 s, mmproj 9.0 s, encode 229 ms, image-embedding
+  decode 379 ms (7 batches of 32), generation 114.9 tok/s (title clock).
+  `…/PPSA99041/20261016-081904/`.
+  Cause: ggml-vk runs F16-weight matmuls at the default precision with its
+  FP16-accumulating pipelines (`ggml_vk_get_mul_mat_mat_f16acc`; fp16 device,
+  coopmat off in the title). Fix: `patches/0004-ps5-clip-f32-matmul-accumulation.patch`.
+- **Run 2, same with the patch** (eboot `915c2e95…f641`): **pass, exit 0,
+  closed.** Embedding: relative L2 0.0082, cosine 0.999967, max abs 0.623
+  (4.1 % of the largest reference value 15.08), one token (189, white
+  background) at 0.976, every other above 0.995; per slice 0.0065 (main),
+  0.0020, 0.0091, 0.0102 (deepstack 5, 11, 17); better than the Mac's Metal
+  (0.0106). Text: all 47 tokens identical to the CPU's (rule `identical`),
+  "The image displays the word "HELLO" in bold black letters above three
+  geometric shapes—a red circle, a blue square, and a green triangle—arranged
+  horizontally. The word written in the image is "HELLO"." Memory identical
+  to run 1. Encode 231 ms (196 tokens, 784 patches), image decode 380 ms,
+  text 316 ms, generation 114.8 tok/s, mmproj load 9.0 s (clip reads through
+  `ifstream`, i.e. `fread`), text load 2.6 s. `…/PPSA99041/20261016-082235/`.
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

@@ -1,0 +1,49 @@
+diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -927,7 +927,27 @@
+     cb(cur, "pixel_shuffle", -1);
+ 
+     return cur;
++}
++
++#if defined(__PROSPERO__)
++// PS5LM (native PS5 title): every matrix multiplication of the encoder graph
++// (patch-embedding conv's im2col matmul, QKV/output/FFN/merger/deepstack
++// projections, non-flash attention) requests F32 accumulation. With F16
++// weights at the default precision ggml-vulkan picks its FP16-accumulating
++// matmul pipelines (coopmat is off in the title), whose error over K = 4096
++// put the image embedding 7 % from the CPU's. Text-model graphs are unchanged.
++static ggml_cgraph * clip_ps5lm_f32_accumulation(ggml_cgraph * gf) {
++    for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
++        ggml_tensor * node = ggml_graph_node(gf, i);
++        if (node->op == GGML_OP_MUL_MAT) {
++            ggml_prec_set_acc(node, GGML_PREC_F32);
++        }
++    }
++    return gf;
+ }
++#else
++static ggml_cgraph * clip_ps5lm_f32_accumulation(ggml_cgraph * gf) { return gf; }
++#endif
+ 
+ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const clip_image_f32_batch & imgs,
+                                                             const clip_encode_params * params = nullptr) {
+@@ -3803,7 +3823,7 @@
+ 
+     // only initialize backend buffers, but do not allocate them yet
+     static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
+-        ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
++        ggml_cgraph * gf = clip_ps5lm_f32_accumulation(clip_get_graph_builder(&ctx_clip, batch)->build());
+         ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
+ 
+         ctx_clip.mem_compute.clear();
+@@ -4495,7 +4515,7 @@
+ 
+     // build the inference graph
+     ggml_backend_sched_reset(ctx->sched.get());
+-    ggml_cgraph * gf = clip_get_graph_builder(ctx, imgs, params)->build();
++    ggml_cgraph * gf = clip_ps5lm_f32_accumulation(clip_get_graph_builder(ctx, imgs, params)->build());
+     if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), gf)) {
+         LOG_ERR("%s: failed to allocate compute graph\n", __func__);
+         return false;

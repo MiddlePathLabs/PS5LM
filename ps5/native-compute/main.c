@@ -457,7 +457,7 @@ static const struct { const char *name; char *value; } probe_environment[] = {
 #if defined(PS5LM_GGML_MODEL)
     /* ggml splits model buffers below the dispatch guard's 256 MiB cap,
      * leaving room for its +32-byte host buffers and alignment. */
-    {"GGML_VK_FORCE_MAX_ALLOCATION_SIZE", "251658240"},
+    {"GGML_VK_FORCE_MAX_ALLOCATION_SIZE", PS5LM_MODEL_VK_MAX_ALLOCATION}, /* "251658240" unless a model needs more */
     /* max_buffer_size is used only by supports_op's tensor-size check, never
      * for an allocation. llama's load-time probe for an output layer is a
      * MUL_MAT with 512 rows, so a 248320-token vocabulary has a 485 MiB probe
@@ -957,6 +957,23 @@ static int setup_runtime(struct probe *p)
     if (!S_ISREG(model_info.st_mode) || (uint64_t)model_info.st_size != PS5LM_MODEL_BYTES)
         return setup_failed(p, "setup_model_type_or_size", PS5LM_MODEL_PATH, model_stat, 0, false,
                             model_info.st_mode);
+#if defined(PS5LM_MODEL_VISION)
+    /* The mmproj too: present, a regular file of the pinned size, read-only. */
+    const int mmproj_fd = open(PS5LM_MMPROJ_PATH, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (mmproj_fd < 0)
+        return setup_failed(p, "setup_open_mmproj", PS5LM_MMPROJ_PATH, mmproj_fd, errno, true, 0);
+    struct stat mmproj_info;
+    const int mmproj_stat = fstat(mmproj_fd, &mmproj_info);
+    const int mmproj_errno = mmproj_stat != 0 ? errno : 0;
+    const int mmproj_close = close(mmproj_fd);
+    if (mmproj_stat != 0)
+        return setup_failed(p, "setup_fstat_mmproj", PS5LM_MMPROJ_PATH, mmproj_stat, mmproj_errno, true, 0);
+    if (mmproj_close != 0)
+        return setup_failed(p, "setup_close_mmproj", PS5LM_MMPROJ_PATH, mmproj_close, errno, true, 0);
+    if (!S_ISREG(mmproj_info.st_mode) || (uint64_t)mmproj_info.st_size != PS5LM_MMPROJ_BYTES)
+        return setup_failed(p, "setup_mmproj_type_or_size", PS5LM_MMPROJ_PATH, mmproj_stat, 0, false,
+                            mmproj_info.st_mode);
+#endif
 #endif
     for (size_t i = 0; i < sizeof(probe_environment) / sizeof(probe_environment[0]); ++i) {
         const int rc = setenv(probe_environment[i].name, probe_environment[i].value, 1);

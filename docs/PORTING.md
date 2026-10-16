@@ -1903,6 +1903,157 @@ OLMoE graph split at the router (an eval callback on `ffn_moe_topk`), which
 alone bounds Route B; (3) then the cache patch, gated by tokens identical to
 the resident run of the same model and build.
 
+### Vision: Qwen3-VL, pins, budget and checks (2026-10-16)
+
+Written before the first load of a vision model.
+
+**Model.** Qwen3-VL 4B Instruct from the publisher's own GGUF repo: the text
+model at Q4_K_M and its mmproj (vision encoder + merger) at F16. F16 rather
+than the published Q8_0 mmproj (454 MB): it is the encoder's original
+precision, so the GPU-vs-CPU comparison measures the backends and not a
+quantised encoder, and the 382 MB it costs fits easily. The pinned mtmd
+(`tools/mtmd/models/qwen3vl.cpp`, projector `qwen3vl_merger`) loads both.
+Fallback, unused so far: Qwen2.5-VL 3B.
+
+| File | Repo @ revision | Bytes | SHA-256 |
+|---|---|---|---|
+| `Qwen3VL-4B-Instruct-Q4_K_M.gguf` | `Qwen/Qwen3-VL-4B-Instruct-GGUF` @ `1cd86afb9a95c410a6038ab3b40d8b578c892266` | 2,497,281,664 | `66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a` |
+| `mmproj-Qwen3VL-4B-Instruct-F16.gguf` | same | 836,180,256 | `256f3a43bd4205ffef48d6b92715e1e70b5b0e9aef06522584967513a9985331` |
+
+Both SHA-256 equal the Hub's LFS ids at that revision and the downloaded
+files. Text model: `qwen3vl`, 36 layers, hidden 2560, 32 Q / 8 KV heads of
+128, M-RoPE sections 24/20/20, 3 deepstack layers (so `n_embd_inp` = 4 x 2560
+= 10240: the image embedding carries the main features and three deepstack
+slices), tied embeddings: `token_embd` is one Q6_K tensor of 304.3 MiB
+(151,936 x 2560), the largest tensor. Mmproj: ViT with 24 layers, hidden 1024,
+16 heads of 64, patch 16, spatial merge 2, learned 48 x 48 position
+embeddings (interpolated to the image), deepstack after layers 5, 11 and 17;
+787 MiB F16 + 10 MiB F32.
+
+**Test image and prompt.** `testdata/vision/hello-shapes-448.png` (448 x 448,
+2558 bytes, SHA-256 `93d3005243aadc3361ec4e1ee3109a929fbfaaf19ed40df40b26a6122d0df774`),
+drawn by `scripts/make-vision-test-image.py` (pure Python: block letters from
+a 5 x 7 pixel font defined in the script, no font file, so no licence beyond
+the repo's): the word HELLO in black, a red circle, a blue square and a green
+triangle on white. At patch 16 and merge 2 it is 14 x 14 = **196 image
+tokens**. The image tokens are capped: `image_min_tokens` 64,
+`image_max_tokens` 196, which also caps the encoder's warm-up graph (the
+pin's default for Qwen-VL warms up at 46 x 46 = 2116 tokens, 8464 patches).
+Prompt (Qwen chat format, user turn only): `<__media__>Describe this image in
+one sentence. Then answer: what word is written in the image?`; mtmd wraps the
+image in `<|vision_start|>`/`<|vision_end|>`. 28 text tokens + 196 image
+tokens; 64 greedy tokens at most. **Checkable answer:** the generated text must
+contain `HELLO` (case-insensitive). The shapes are reported, not gated.
+
+**Runner** (`ps5/native-compute/ggml-vision.cpp`, build mode `vl4b`):
+the model mode's runtime (ledger, guards, closed environment, watchdog, close)
+with libmtmd linked (`build-native-llama.sh` builds `mtmd` with
+`PS5LM_LLAMA_MTMD=1`; the server build already had it). Order: load the text
+model (no mmap, all 37 layers on the GPU), `mtmd_init_from_file` (GPU, flash
+attention on, warm-up on), one context (1024 tokens, batch = ubatch = 32,
+FP32 flash attention, F16 KV), decode the embedded PNG with mtmd's helper
+(stb_image, as the server does), tokenize, `mtmd_encode_chunk` (timed),
+compare the embedding with the CPU's, then decode text, image embedding (7
+batches of 32 with M-RoPE positions) and text, and generate. The mmproj loads
+through clip's `std::ifstream` (no mmap anywhere). The CPU reference's
+embedding (8,028,160 B) and trace samples (1.8 MB) are embedded in the eboot
+with `.incbin`, so the title compares in place and writes only its usual
+output file.
+
+**Allocation cap for the tied output.** The 304.3 MiB output matrix does not
+fit ggml's 240 MiB allocation cap. For this model only:
+`GGML_VK_FORCE_MAX_ALLOCATION_SIZE` 320 MiB and the dispatch guard's
+per-allocation cap 336 MiB (`PS5LM_MODEL_GPU_ALLOCATION_MIB`); every other
+model keeps 240 / 256 MiB (the OLMoE build is still byte-identical,
+`354b6fb4…cc00`). The output layer's load-time probe (F32 151,936 x 512 =
+297 MiB) is under the 512 MiB `max_buffer_size`; the 151,936-row LM head is
+split by patch 0006 as Qwen3-30B's was.
+
+**Budget** (MiB; host measurements with the same pin: text model 2375.9 in
+GPU buffers, KV 144.0 at 1024 tokens, encoder compute 29.9 on the CPU at 196
+tokens, context compute 20.1). Written before the first load; caps enforced
+in the title:
+
+| Part | Expected | Cap | Enforced by |
+|---|---|---|---|
+| Before the load | ~90 | in the total | ledger |
+| Text weights: GPU buffers 2376 (incl. the tied output's GPU copy) + input embedding in `Vulkan_Host` 304 + loader transients | ~2700 | 3072 | ledger delta across `llama_model_load_from_file`, else `model_weights_budget` |
+| Mmproj: weights 797 + encoder compute (~30–60 at 196 tokens) + read buffer (largest tensor 32) | ~880 | 1152 | ledger delta across `mtmd_init_from_file`, else `mmproj_budget` |
+| Context: KV 144 + compute + scheduler | ~250 | 1024 | ledger delta across `llama_init_from_model`, else `model_context_budget` |
+| Image embedding (host copy) + PNG decode | ~10 | in the total | ledger |
+| All Vulkan memory | ~3.8 GiB | 5248 (3072 + 1024 + 1152) | dispatch guard |
+| **Total direct memory** | **~3.9 GiB** | **6144** | ledger, per allocation |
+
+6144 MiB is the largest total that has passed (OLMoE), so this is not a new
+step. Watchdog 300 s (`-t 600`); loads expected ~2–3 s (text, `read(2)`)
+and up to ~10 s (mmproj through `fread` at the uncached 92 MB/s). The
+encoder is about 0.5 TFLOP (24 layers x 784 patches); at the 7–8 TFLOP/s
+the 512-token prompts reached it is ~70 ms, far inside the 2 s fence limit.
+Queue submissions 16,384.
+
+**CPU reference** (`scripts/build-host-vision-reference.sh vl4b`, same pin
+and patches, CPU only, writes `build/native-vl4b/gen/`;
+`test-results/local/vision-reference/vl4b-20261016-080617/`): "The image
+displays the word "HELLO" in bold black letters above three geometric
+shapes—a red circle, a blue square, and a green triangle—arranged
+horizontally. The word written in the image is "HELLO"." then `<|im_end|>`
+(47 tokens). First-8 gaps all above 0.56; the smallest gap is 0.018 at token
+10. Answer right, shapes right.
+
+**Image embedding tolerance**, fixed before the first console run. The Mac's
+Metal stand-in of the same runner (`PS5LM_VISION_METAL=1`;
+`test-results/local/vision-metal-smoke/vl4b-20261016-080628/`) against this
+CPU reference: max abs 0.874 (5.8 % of the largest reference value 15.08),
+relative L2 0.0106, cosine 0.99994; per token, 195 of 196 tokens above
+0.9987 and one (token 189, a white-background patch in the bottom row) at
+0.957, its deepstack slice from layer 11 at 0.88 (a low-norm token, where
+LayerNorm amplifies rounding); 47 tokens identical to the CPU's. Per-layer
+samples: relative error ~0.001 through layer 9, rising to ~0.02 by layer 22
+as activations grow. So per-token minimum cosine is not a usable rule.
+**Tolerance:** relative L2 over the whole embedding ≤ 0.03, cosine ≥ 0.9995,
+and at most 2 of 196 image tokens (1 %) with their own cosine below 0.995.
+Reported as well: max abs error, max abs relative to the largest reference
+value, per-slice relative L2 (main, deepstack 5, 11, 17), worst token.
+
+**Pass rule** (all of): the embedding within the tolerance; the text rule of
+the text models (first 8 tokens identical to the CPU's, or the first
+difference at a token whose CPU top-two gap is < 0.5; no NaN, no run of 8
+equal tokens, no llama.cpp error line, no untracked Vulkan free); the answer
+contains HELLO; all layers and the output on the GPU.
+
+**If the embedding is outside the tolerance**, the title encodes once more
+with an eval callback that copies strided samples (every 61st value) of the
+encoder's tensors: `patch_bias` (patch-embedding conv2d/im2col + bias),
+`inp_pos_emb` (+ interpolated position embeddings), layer 0's
+`Qcur_rope`/`Kcur_rope` (image M-RoPE), `kqv_out` (non-causal attention),
+`attn_out`, `ffn_inp`, `ffn_out`, and every `layer_out-N`; each is compared
+with the CPU's samples (`PS5LM_VISION_TRACE`, first tensor over 0.03) to find
+the op before any fix in `patches/`.
+
+**Result, model mode** (console runs 1 and 2 of this work; CONSOLE.md).
+Run 1 failed the embedding tolerance safely (relative L2 0.070, cosine
+0.99766, 31 tokens below 0.995; text `prefix`, answer right). The trace put
+the first tensor over tolerance at layer 0's FFN output, every matmul output
+5–30x worse than Metal's. Cause, read from ggml-vk at the pin:
+`ggml_vk_get_mul_mat_mat_f16acc` returns true for F16 weights at
+`GGML_PREC_DEFAULT` on an fp16 device without coopmat (the title disables
+coopmat), so the encoder's F16 x F32 matmuls ran the FP16-accumulating
+`matmul_f16_f32_f16acc` pipelines over K up to 4096 (the FFN down
+projection). Fix, `patches/0004-ps5-clip-f32-matmul-accumulation.patch`
+(`__PROSPERO__` only): after clip builds its graph (the reserve and the
+encode), every `GGML_OP_MUL_MAT` node requests `GGML_PREC_F32`
+(`ggml_prec_set_acc`), which ggml-vk honours with its `matmul_f16_f32` / dot2
+f32acc pipelines; this covers the patch-embedding conv's im2col matmul too.
+Text-model graphs and other platforms are unchanged (the CPU reference's
+embedding is byte-identical with the patch applied). Run 2 passed: relative
+L2 0.0082, cosine 0.999967, one token below 0.995 (the white-background
+token 189 at 0.976), all 47 tokens identical to the CPU's, answer right,
+memory as budgeted (text +2716, mmproj +1000, context +227 MiB, peak
+4027 MiB of 6144), encode 231 ms for 196 image tokens, 114.8 tok/s
+generation. Not done: an op-level check of conv2d/im2col, the image RoPE and
+non-causal attention by themselves; after the fix every traced tensor is
+inside tolerance in the one encode, so there was no op left to isolate.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

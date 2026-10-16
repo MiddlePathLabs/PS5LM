@@ -123,7 +123,15 @@ CLIMB = {
                  'revision': '6c6e8692f43e4ca663f7ece8229a1361090d3a4c',
                  'file': 'Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf', 'bytes': 9870270464,
                  'sha256': 'f2dc78edd3ec0171904f1945d8c05a948131b1103172b1710b763db2eb65f52a'},
+    # Vision (docs/PORTING.md "Vision"): the text model and its mmproj.
+    'vl4b': {'repo': 'Qwen/Qwen3-VL-4B-Instruct-GGUF',
+             'revision': '1cd86afb9a95c410a6038ab3b40d8b578c892266',
+             'file': 'Qwen3VL-4B-Instruct-Q4_K_M.gguf', 'bytes': 2497281664,
+             'sha256': '66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a',
+             'mmproj': {'file': 'mmproj-Qwen3VL-4B-Instruct-F16.gguf', 'bytes': 836180256,
+                        'sha256': '256f3a43bd4205ffef48d6b92715e1e70b5b0e9aef06522584967513a9985331'}},
 }
+VISION = ('vl4b', 'vl8b')
 
 
 def main():
@@ -301,6 +309,12 @@ def main():
             manifest['model'] = dict(CLIMB[climb], console_path='/data/PS5LM/models/' + CLIMB[climb]['file'])
         if not server:  # the server mode is checked against the model mode's tokens from the Mac
             manifest['cpu_reference_header_sha256'] = digest(work / 'gen/model-reference.h')
+        if climb in VISION:
+            manifest['build_scripts']['build-host-vision-reference.sh'] = digest(root / 'scripts/build-host-vision-reference.sh')
+            manifest['test_image_sha256'] = digest(root / 'testdata/vision/hello-shapes-448.png')
+            if not server:
+                manifest['cpu_reference_files_sha256'] = {
+                    f: digest(work / 'gen' / f) for f in ('vision-reference.h', 'vision-embd-ref.bin', 'vision-trace-ref.bin')}
         manifest['build_scripts']['build-host-model-reference.sh'] = digest(root / 'scripts/build-host-model-reference.sh')
         manifest['hardware_gate'] = 'One monitored ps5-native-test.sh run; read result.json and confirm closed before the next.'
     (work / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

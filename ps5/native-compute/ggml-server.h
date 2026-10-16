@@ -7,7 +7,11 @@
 #ifndef PS5LM_GGML_SERVER_H
 #define PS5LM_GGML_SERVER_H
 #include "ggml-model.h"
-#if defined(PS5LM_MODEL_QWEN3MOE)
+#if defined(PS5LM_MODEL_QWEN3VL8B)
+#define PS5LM_SERVER_WORKLOAD "server-vl8b"
+#elif defined(PS5LM_MODEL_QWEN3VL4B)
+#define PS5LM_SERVER_WORKLOAD "server-vl4b"
+#elif defined(PS5LM_MODEL_QWEN3MOE)
 #define PS5LM_SERVER_WORKLOAD "server-qwen3moe"
 #elif defined(PS5LM_MODEL_OLMOE)
 #define PS5LM_SERVER_WORKLOAD "server-olmoe"

@@ -17,6 +17,12 @@ llama-server's medians for a 128-token prompt and 128 generated tokens
 | Granite 3.1 3B-A800M | Q4_K_M | 1.88 GiB | granitemoe | 3072 MiB | 711 / 150 |
 | OLMoE 1B-7B 0125 | Q4_K_M | 3.92 GiB | olmoe | 6144 MiB | 615 / 232 |
 
+Vision (model mode, title clock; [PORTING.md](PORTING.md) "Vision"): Qwen3-VL
+4B Instruct Q4_K_M (2.33 GiB, `qwen3vl`) + its F16 mmproj (0.78 GiB) in a
+6144 MiB budget: one 448 x 448 image (196 tokens) encoded in 231 ms,
+embedding within 0.8 % (relative L2) of the CPU's, text identical to the CPU,
+114.8 tok/s generation.
+
 Qwen3-30B-A3B-Instruct-2507 IQ2_M (9.19 GiB, `qwen3moe`) loaded and ran fully
 resident in a 10560 MiB budget (peak 9723 MiB, 37 tok/s on the title's clock)
 but failed the CPU-comparison rule at token 7; see [CONSOLE.md](CONSOLE.md).
