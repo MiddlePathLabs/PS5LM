@@ -618,6 +618,17 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   pp 168/194, soak 100/100, peak 10304 MiB, `…/20261016-113242/`, left deployed (eboot
   `51f9f74d…c0d0`, a server build: launching it opens port 8081 for one 600 s window).
 
+- **2026-10-16, regression reruns on the patched RADV** (`patches/mesa/0001`, archive
+  `radv-ps5lm`; no other change):
+  - OLMoE model mode (eboot `ac28ab09…a3e6`): pass, exit 0, closed. All 32 tokens and every
+    printed logit equal to the unpatched-driver run `…/20261016-075431/` (rule `prefix`, 25
+    matched, gap 0.241 at the difference); peak 4456382464 B, the same; 222.7 tok/s on the
+    title's clock (219.8 before); load 3.7 s. `…/PPSA99041/20261016-122141/`.
+  - Qwen3-VL 8B model mode (eboot `1b2e652b…decd`, now also with patch 0005): pass, exit 0,
+    closed. Embedding statistics equal to run 6 to every printed digit (rel L2 0.0055702,
+    cosine 0.999984490), 47/47 tokens identical, HELLO; 5342 submissions and the 6458 MiB
+    peak equal; 80.1 tok/s; mmproj load 12455 → 699 ms (`read(2)`). `…/PPSA99041/20261016-122253/`.
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

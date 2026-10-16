@@ -2202,8 +2202,11 @@ and `/v1/systemone` decision models, which this work doesn't need.
   - Evidence: `test-results/ps5/PPSA99041/20261016-090943/`, `api-check/20261016-091003/`,
     `api-bench/20261016-091017/`.
 
-**Not yet rerun with the patched driver:** the other build modes (MoE, vision). Their earlier
-passes used the unpatched `radv-release` archive, and their next builds link the patched one.
+**Rerun with the patched driver (2026-10-16, 12:20):** the OLMoE model mode reproduced its
+unpatched-driver run exactly (32 tokens and every printed logit, peak, 222.7 tok/s), and the
+Qwen3-VL 8B model mode its embedding statistics, 47 tokens, submissions and peak (CONSOLE.md).
+Every build mode that passed before has now passed on the patched driver (Qwen3.5 0.8B,
+OLMoE and Qwen3-VL directly; the measured models were first run on it).
 
 ### Image-encoder loads with read(2) (2026-10-16)
 
