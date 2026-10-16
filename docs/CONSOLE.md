@@ -462,6 +462,35 @@ runs passed with exit 0 and `"closed": true`; the console answered after each.
 | Granite 3.1 1B-A400M Q4_K_M | 1370 / 1396 → 3328 / 6532 | 212.5 / 210.6 → 344.6 / 335.7 | 6.0 s → 1.0 s |
 | Granite 3.1 3B-A800M Q4_K_M | 711 / 709 → 1762 / 3321 | 149.5 / 146.4 → 236.7 / 228.1 | 21.5 s → 2.1 s |
 
+**SSD streaming, 2026-10-16** (PORTING.md "SSD streaming"; at most 10 runs,
+one used):
+
+- **Run 1, stream probe** (`stream-probe`, eboot `e734fdfc…aaf7`, total cap
+  1024 MiB, no model load): **exit 5, title not closed: stop condition.**
+  The title started (PID 219, `flex` 403,701,760 B available, direct
+  12,863,930,368 B, 16 KiB pages, `vm.stats` sysctls unreadable in a title),
+  printed its first line and then never returned from `mmap(PROT_READ,
+  MAP_SHARED)` of the 3.9 GiB OLMoE file / `mincore()` over that mapping. In
+  the kernel log, ShellCore's `VM Stats` wire count rose by ~100 MiB every
+  ~5 s (451 → 1212 MiB), the kernel's memory stats then showed the whole
+  system pool wired (`total 79598, free 476 … wire 78455` pages of 16 KiB:
+  ~1.2 GiB), ShellCore and the UI were swapped out (`swap out` 93.6 → 152 MiB,
+  their RSS fell), and `FMEM allocation timeout` repeated 16 times. The
+  watchdog (300 s) wrote its result (rc 124) and the exit request returned
+  `close_rc 0`, but no `ProcessTerm` followed before the script's 300 s
+  timeout. Afterwards FTP, klog, Payload Manager and ShadowMountPlus ports
+  accepted connections, but `games/info` did not answer within 10 s and the
+  kernel log sent nothing in 12 s. **The console needs a person** (check
+  whether PPSA99041 is still open; reboot if the system is still starved).
+  Evidence: `test-results/ps5/PPSA99041/20261016-003554/` (`klog.log`,
+  `native-model.out`, `result.json`).
+  Reading: a file mapping in a title is not lazily paged page cache on this
+  firmware: its pages are wired from the system's small shared pool
+  (consistent with the payload era, where an mmap'd model counted against the
+  payload's 8 GiB flexible budget). **Never mmap a model file in a title.**
+  The script's `-t` should exceed the title's watchdog by a minute, so a
+  watchdog close can still be observed (here both were 300 s).
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

@@ -30,11 +30,19 @@
 /* OLMoE's chat template: BOS (<|endoftext|>, not added by the tokenizer), user turn. */
 #define PS5LM_MODEL_PROMPT "<|endoftext|><|user|>\nIn a short paragraph, explain how a GPU differs " \
     "from a CPU.\n<|assistant|>\n"
+#if defined(PS5LM_STREAM_PROBE)
+/* The streaming probe loads no model: ~140 MiB of heap, capped at 1024 MiB. */
+#undef PS5LM_GGML_WORKLOAD
+#define PS5LM_GGML_WORKLOAD "stream-probe"
+#define PS5LM_MODEL_TOTAL_MIB 1024u
+#endif
 #define PS5LM_MODEL_WEIGHTS_MIB 4608u
 /* 512 until the performance work: the server's context for 512-token physical
  * batches needs about 60 MiB more (docs/PORTING.md "Performance"). */
 #define PS5LM_MODEL_CONTEXT_MIB 768u
+#ifndef PS5LM_MODEL_TOTAL_MIB
 #define PS5LM_MODEL_TOTAL_MIB 6144u
+#endif
 #define PS5LM_MODEL_SUBMIT_LIMIT 16384u
 #define PS5LM_MODEL_WATCHDOG_S 300u
 #define PS5LM_MODEL_SERVER_LOAD_S 180u

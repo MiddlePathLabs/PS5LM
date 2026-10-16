@@ -1723,6 +1723,186 @@ tokens, measured on the Mac (Metal): Granite 1B compute 9.6 → 38.3 MiB, 3B
 No cap changes.
 
 
+### SSD streaming: feasibility, routes and budgets (2026-10-16)
+
+Goal: run an MoE model whose file is larger than the memory the title holds
+for it, with the experts coming from the SSD. Shared tensors (attention,
+router, norms, embeddings, LM head) stay resident on the GPU; only expert
+weights stream. A well-measured "not worth it" is an acceptable outcome.
+
+**Expert bytes** (from the GGUF tensor tables; sizes are offset differences,
+so they include alignment):
+
+| | OLMoE-1B-7B-0125 Q4_K_M | Qwen3-30B-A3B-2507 IQ2_M |
+|---|---|---|
+| File | 4,213,512,192 B (3.92 GiB) | 9,870,270,464 B (9.19 GiB) |
+| Expert tensors (`ffn_{gate,up,down}_exps`) | 3,900,702,720 B (3720 MiB, 92.6 %) | 9,003,073,536 B (8586 MiB, 91.3 %) |
+| Everything else | 311,027,712 B (297 MiB) | 861,227,008 B (821 MiB) |
+| Layers x experts, used per token | 16 x 64, 8 | 48 x 128, 8 |
+| One expert's matrix (contiguous in the file) | Q4_K 1,179,648 B; Q6_K 1,720,320 B | IQ2_XS 454,656 B; IQ3_XXS 602,112 B |
+| One expert (gate+up+down), mean | 3.63 MiB | 1.40 MiB |
+| Expert bytes one token needs (8 x layers) | **465 MiB** (128 expert-layers) | **537 MiB** (384 expert-layers) |
+
+**Without any cache** every token reads all of it: at the best measured rate
+(3.2–3.7 GB/s, four threads, 4 MiB reads) that is at most **7.2 tok/s
+(OLMoE) and 6.2 tok/s (Qwen3)**, at the single-thread 1 MiB rate (1.4 GB/s)
+2.9 and 2.5 tok/s, before any compute. Fully resident today: OLMoE 327 tok/s
+(server), Qwen3 37 tok/s (old defaults, failed the token rule).
+
+**Expert reuse** (host routing trace, same pin, CPU: four prompts of 22–33
+tokens, 128 greedy tokens each, 512 generated tokens; per-layer LRU warmed by
+the prompt; `ffn_moe_topk-L` captured with an eval callback). A token keeps on
+average 39 % (OLMoE) / 44 % (Qwen3) of the previous token's experts per layer.
+
+| Experts cached per layer | OLMoE resident (MiB) | OLMoE hit | OLMoE miss MiB/token | Qwen3 resident (MiB) | Qwen3 hit | Qwen3 miss MiB/token |
+|---|---|---|---|---|---|---|
+| 1/8 | 762 | 0.27 | 340 | 1895 | 0.56 | 234 |
+| 1/4 | 1227 | 0.52 | 222 | 2968 | 0.77 | 122 |
+| 3/8 | 1692 | 0.68 | 151 | 4041 | 0.88 | 64 |
+| 1/2 | 2157 | 0.79 | 96 | 5114 | 0.93 | 37 |
+| 5/8 | 2622 | 0.88 | 57 | 6188 | 0.96 | 24 |
+| 3/4 | 3087 | 0.94 | 29 | 7261 | 0.97 | 15 |
+
+Read-bound ceilings from this table (misses / read rate, nothing else):
+OLMoE at half its experts (2.1 GiB resident vs 3.9 GiB file) 15–35 tok/s at
+1.5–3.5 GB/s; Qwen3 at half (5.0 GiB vs 9.2 GiB) 39–90 tok/s, at 3/8
+(3.9 GiB) 22–52 tok/s. The trace is short (512 tokens, four topics); a
+static "hottest experts" pin is worse than LRU here (OLMoE 0.72 vs 0.79 at
+1/2), so routing is topic-local. Real rates will be lower than the ceilings:
+a miss is a 0.45–1.7 MB read on the critical path of its layer (latency, not
+just bandwidth), and the experts a layer needs are only known after its
+router has run, so every layer needs a GPU→CPU round trip before its reads
+(48 per Qwen3 token).
+
+**Route A, no new kernels: experts on the CPU, from the file.** llama.cpp
+keeps tensors matching `ffn_.*_exps` in a CPU buffer
+(`tensor_buft_overrides`); with mmap that buffer is the file mapping itself,
+so expert pages come from the SSD through the page cache and the CPU
+computes `MUL_MAT_ID` on the selected experts only; everything else stays on
+the GPU. Its cost per token is the CPU's expert compute (465 / 537 MiB of
+weights per token) plus a GPU→CPU→GPU hop per layer plus page faults for
+misses. Unknowns, all measured by the probe below before any model run:
+(1) does mmap of a file work in a title at all (PS5SX2 reports that mmap
+fails in its app sandbox), and where are mapped file pages charged (the
+title's flexible pool is only 448 MiB; the direct budget is ours; or the
+system's page cache)? (2) how fast pages fault in; (3) the CPU's
+`MUL_MAT_ID` rate on these quant types with 1–8 threads (13 logical CPUs
+allowed, mask `0x1fff`).
+
+**Route B (only if A shows the bottleneck is compute, not reads): a GPU
+expert cache**, a bounded patch keeping hot experts in device memory and
+uploading misses from large `read()`s. Decided after Route A's numbers.
+
+**Correctness gate**, fixed before any streaming run: the streaming run's
+32 greedy tokens equal the fully resident run's of the same model and build
+(OLMoE: the model mode's tokens, runs 20261015-212150 / 20261016-001732), or
+pass the GPU-vs-CPU rule against the CPU reference. Recorded per run: memory
+peaks per part (direct ledger, Vulkan, page-cache residency of the mapping
+via `mincore`), tok/s, and bytes read from storage per token (newly resident
+pages of the mapping per token, a lower bound).
+
+#### Stream probe (console run 1 of this work): budget and limits
+
+Build `bash scripts/build-native-compute.sh stream-probe`
+(`ps5/native-compute/ggml-stream-probe.cpp`); no model load. Reads the
+OLMoE and Qwen3 files already on the console, read-only. As run (eboot
+`e734fdfc…aaf7`) it began with an mmap section; after the result below that
+section was removed (eboot `c2b48c08…713e`, 281 imports, built and
+validated, not run).
+
+| Part | Expected | Cap |
+|---|---|---|
+| Heap (one 120 MiB buffer: expert tensors for the CPU test, pread buffers) | ~125 MiB | in the total |
+| Tiny GPU check (one 32-float add) | < 1 MiB | in the total |
+| **Total direct memory** | **~200 MiB** | **1024 MiB** (ledger) |
+| Mapped file pages touched | ≤ 290 MiB | 224 MiB sequential + 40 + 16 slices; the sequential steps (32 MiB) stop early if the title's flexible pool falls by 64 MiB, the direct budget by 64 MiB, or the system's free + inactive + cache pages below 1 GiB |
+| pread through the page cache | ~400 MB | the loader has read 4–10 GB this way |
+| CPU threads | 1, 2, 4, 6, 8 | 0.4 s per setting, persistent ggml threadpool, no polling between graphs |
+
+Every test has a time limit (pread 8 s each); expected total ~30 s; watchdog
+300 s. Checked on the Mac first with stubs for the PS5 calls (same code,
+local model files): all sections complete. New imports, all in `libkernel`:
+`mincore`, `madvise`, `pread`, `getrusage`, `sysctlbyname`,
+`sceKernelAvailableFlexibleMemorySize` (283 imports, validator passes).
+
+**Result: the probe hung in `mmap()` of the model file; stop condition**
+(console run 1, `test-results/ps5/PPSA99041/20261016-003554/`, details in
+CONSOLE.md). The title printed its start line (flexible pool 385 MiB
+available of 448, direct 12.0 GiB, 16 KiB pages) and never got past mapping
+the 3.9 GiB OLMoE file read-only and shared (or the `mincore()` over it
+that follows): the kernel's wired pages grew by ~20 MB/s until the whole
+~1.2 GiB system pool was wired, system processes were swapped out, `FMEM
+allocation timeout` repeated, and after its watchdog's exit request the title
+did not close within the script's window. My stop rules sat inside the
+touch loop, after the mapping, so they never ran: the danger is the mapping
+itself, not the pages touched. Console work stopped there (1 of 10 runs).
+
+What this settles:
+
+- **Route A is not viable in a title.** A file mapping's pages are wired
+  out of the small pool the system itself lives on, so expert weights
+  cannot come "from the file through the page cache" here; with a 3.6–8.4 GiB
+  expert set this freezes the console. The resident model modes were safe
+  only because they load with `LLAMA_LOAD_MODE_NONE` (and the server with
+  `-lm none`). llama.cpp's default load mode is `AUTO` = mmap: **every model
+  build must keep the explicit no-mmap setting**, and the
+  `tensor_buft_overrides` + mmap recipe must not be tried in a title. It
+  might still work in a payload (8 GiB flexible), but a payload has no
+  direct memory for the GPU part, so it is no help here.
+- The CPU half of Route A (expert compute on 13 allowed CPUs) was never
+  measured on the PS5: the probe's pread and CPU sections come after the
+  mapping. A Mac check of the same code is no stand-in for the PS5's Zen 2.
+  Without mmap, CPU experts would have to sit in our own direct memory,
+  which is residency, not streaming.
+- The only safe way to bring weights in from storage is `read()`/`pread()`
+  into memory the title allocated itself (the direct-memory ledger), as the
+  loader already does at 1.2 GB/s and the storage probe at 1.4–3.7 GB/s.
+
+**Route B, a GPU expert cache fed by `pread()`** (designed, not built; no
+console runs left in this session, and building it blind would be a forced
+prototype). Shape: per layer, a fixed number of expert slots in host-visible
+device memory (one Vulkan buffer per layer and matrix); the router's top-k
+ids come back to the CPU after each layer's routing (the graph split per
+layer, like a CPU expert pass); misses are read with large parallel `pread()`s
+straight into free slots (LRU), the ids are remapped to slot indices, and the
+layer's `MUL_MAT_ID` runs on the slot buffer. It needs one ggml-vulkan/llama
+patch (slot-indexed expert tensors and an id remap between the router and the
+expert matmuls), bounded memory (slots x slot size, written per model), and
+the same 2 s fence limits.
+
+Latency model (routing trace above; per layer: one GPU→CPU round trip plus,
+if it misses, a read latency plus miss bytes / read rate; GPU compute per
+token 3.45 ms OLMoE (measured) and 20–27 ms Qwen3 (27 ms measured with the old
+defaults); three cases: round trip 0.15 / 0.3 / 0.5 ms, read 3.5 / 2.0 /
+1.4 GB/s, per-layer read latency 0.15 / 0.3 / 0.5 ms;
+`test-results/local/ssd-feasibility/20261016-003542/routeb-model.txt`):
+
+| Experts cached per layer | OLMoE resident | OLMoE tok/s | Qwen3 resident | Qwen3 tok/s |
+|---|---|---|---|---|
+| 3/8 | 1.7 GiB | 8–19 | 3.9 GiB | 9–20 |
+| 1/2 | 2.1 GiB | 11–28 | 5.0 GiB | 12–25 |
+| 5/8 | 2.6 GiB | 17–42 | 6.0 GiB | 13–28 |
+| 3/4 | 3.0 GiB | 28–65 | 7.1 GiB | 15–30 |
+| all (resident, measured) | 4.5 GiB peak | 327 | 9.5 GiB peak | 37 (old defaults) |
+
+For Qwen3 the 48 per-layer round trips (7–24 ms) cost as much as the reads,
+so even a perfect cache stays near half the resident rate; for OLMoE the
+reads dominate and streaming loses 5–30x against residency. Both models fit
+fully resident, so streaming either of them only saves memory nobody needs.
+
+**Recommendation.** Not worth pursuing for the models on the console.
+Worth a measured attempt only for a model that cannot be resident and whose
+quality justifies ~10–20 tok/s, e.g. Qwen3-30B-A3B at Q4_K_M (~17 GiB;
+experts ~16 GiB, ~1 GiB per token) with ~8 GiB of expert slots, and only as
+Route B (never mmap). Before building it: (1) run the probe as it is now
+(mapping removed: pread of expert-sized slices, CPU `MUL_MAT_ID` rates,
+`ps5-native-test.sh -t 360` so the 300 s watchdog's close is visible) after
+the console is recovered, to replace the assumed read latency and round-trip
+times; (2) measure one GPU→CPU→GPU round trip per layer with the resident
+OLMoE graph split at the router (an eval callback on `ffn_moe_topk`), which
+alone bounds Route B; (3) then the cache patch, gated by tokens identical to
+the resident run of the same model and build.
+
 ## On the console
 
-Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works; one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).
+Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

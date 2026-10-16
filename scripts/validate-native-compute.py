@@ -134,7 +134,9 @@ def main():
     # The MoE climb (docs/PORTING.md "Larger MoE models"): native-VARIANT / native-server-VARIANT.
     climb = next((v for v in CLIMB if work.name in ('native-' + v, 'native-server-' + v)), None)
     model = moe or server or climb is not None or work.name == 'native-model'
-    ggml_ops = model or work.name == 'native-ggml-ops'
+    # SSD streaming probe (docs/PORTING.md "SSD streaming"): llama.cpp linked, no model load.
+    probe = work.name == 'native-stream-probe'
+    ggml_ops = model or probe or work.name == 'native-ggml-ops'
     source = Elf(work / 'llvm-pie.elf')
     native = Elf(work / 'eboot.elf')
     omitted_notes = check_reconstruction(native, work / 'extracted.elf')
@@ -276,8 +278,10 @@ def main():
                             'ggml-attn-prefill-scoped-fp32' if ggml_ops else 'integer-dispatch')
     if climb:
         manifest['workload'] = f'server-{climb}' if server else f'model-{climb}-greedy'
+    if probe:
+        manifest['workload'] = 'stream-probe'
     if ggml_ops:
-        manifest['build_command'] += (' ' + work.name.removeprefix('native-') if climb else
+        manifest['build_command'] += (' ' + work.name.removeprefix('native-') if climb or probe else
                                       (' server' if moe else ' server-qwen') if server else
                                       ' moe' if moe else ' model' if model else ' ggml-ops')
         manifest['llama'] = json.loads((root / 'build/native-llama/manifest.json').read_text())

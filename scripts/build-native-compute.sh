@@ -16,7 +16,9 @@ case "$mode" in
     # The MoE climb (docs/PORTING.md "Larger MoE models"): model mode and server mode per step.
     moe3b|olmoe|qwen3moe) work="$root/build/native-$mode" ;;
     server-moe3b|server-olmoe|server-qwen3moe) work="$root/build/native-$mode" ;;
-    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen|moe3b|olmoe|qwen3moe|server-moe3b|server-olmoe|server-qwen3moe]" >&2; exit 2 ;;
+    # SSD streaming (docs/PORTING.md "SSD streaming"): the storage/mmap/CPU probe.
+    stream-probe) work="$root/build/native-$mode" ;;
+    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen|moe3b|olmoe|qwen3moe|server-moe3b|server-olmoe|server-qwen3moe|stream-probe]" >&2; exit 2 ;;
 esac
 # Which model a model or server build loads: its define and its file (checked below).
 variant_flag=(); want=Qwen3.5-0.8B-Q4_K_M.gguf
@@ -24,6 +26,7 @@ case "$mode" in
     moe|server) variant_flag=(-DPS5LM_MODEL_MOE); want=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf ;;
     moe3b|server-moe3b) variant_flag=(-DPS5LM_MODEL_GRANITE3B); want=granite-3.1-3b-a800m-instruct-Q4_K_M.gguf ;;
     olmoe|server-olmoe) variant_flag=(-DPS5LM_MODEL_OLMOE); want=OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf ;;
+    stream-probe) variant_flag=(-DPS5LM_MODEL_OLMOE -DPS5LM_STREAM_PROBE); want=OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf ;;
     qwen3moe|server-qwen3moe) variant_flag=(-DPS5LM_MODEL_QWEN3MOE); want=Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf ;;
 esac
 model_files=(Qwen3.5-0.8B-Q4_K_M.gguf granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
@@ -101,7 +104,7 @@ compile_flags=()
 server=0
 case "$mode" in server*) server=1 ;; esac
 model_mode=0
-case "$mode" in model|moe|moe3b|olmoe|qwen3moe) model_mode=1 ;; esac
+case "$mode" in model|moe|moe3b|olmoe|qwen3moe|stream-probe) model_mode=1 ;; esac
 if [ "$mode" != compute ]; then
     PS5LM_LLAMA_SERVER=$server PS5_NATIVE_SDK="$sdk" RADV_ARCHIVE="$archive" bash "$root/scripts/build-native-llama.sh"
     llama="$root/build/native-llama"
@@ -111,6 +114,10 @@ if [ "$mode" != compute ]; then
         # The model mode's runtime and caps, with llama.cpp's server as the workload.
         compile_flags+=(-DPS5LM_GGML_MODEL -DPS5LM_GGML_SERVER ${variant_flag[@]+"${variant_flag[@]}"})
         runner=ggml-server
+    elif [ "$mode" = stream-probe ]; then
+        # No model load, so no CPU reference; the probe reads the OLMoE and Qwen3 files.
+        compile_flags+=(-DPS5LM_GGML_MODEL ${variant_flag[@]+"${variant_flag[@]}"})
+        runner=ggml-stream-probe
     elif [ "$model_mode" = 1 ]; then
         # The CPU reference comes first: scripts/build-host-model-reference.sh.
         [ -f "$work/gen/model-reference.h" ] || { echo "Missing $work/gen/model-reference.h" >&2; exit 2; }
@@ -254,6 +261,8 @@ if [ "$model_mode" = 1 ] || [ "$server" = 1 ]; then
         strings "$object" | grep -qF "$want" || { echo "$object does not name $want" >&2; exit 2; }
         for other in "${model_files[@]}"; do
             [ "$other" = "$want" ] && continue
+            # The streaming probe reads the Qwen3 file too (read-only, never loaded).
+            [ "$mode" = stream-probe ] && [ "$object" = "$work/obj/$runner.o" ] && continue
             if strings "$object" | grep -qF "$other"; then echo "$object names $other" >&2; exit 2; fi
         done
     done
