@@ -169,7 +169,11 @@
 #endif
 #define PS5LM_MODEL_CTX 1024u
 #define PS5LM_MODEL_BATCH 32u
+#ifndef PS5LM_MODEL_THREADS /* the host CPU references for long contexts use more threads: only the
+                              * rounding order of the CPU's single-token attention (split by thread
+                              * over the KV) depends on it (docs/PORTING.md "Long context") */
 #define PS5LM_MODEL_THREADS 2
+#endif
 /* Budget, MiB. Weights = everything the model load adds (resident buffers plus
  * any loader read or staging buffer the heap keeps); context = KV cache,
  * recurrent state, outputs and compute buffers. The ledger caps the total. */

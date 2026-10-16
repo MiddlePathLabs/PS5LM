@@ -69,6 +69,12 @@ VARIANTS = {
     },
 }
 PREDICT = 32
+# The mixed soak's medium prompt (~600 tokens): invented text, the benchmark passage's style.
+MEDIUM_TEXT = ' '.join(
+    f'Note {i}. A graphics processor runs thousands of small threads at once, grouped into waves that execute '
+    f'the same instruction on different data, while a central processor runs a few threads very quickly. '
+    f'Generating text reads all active weights once per token, so memory bandwidth limits it.'
+    for i in range(1, 15))
 PREFIX = 8
 TIE_GAP = 0.5
 
@@ -175,7 +181,10 @@ def measured_variant(name):
                              '_', str(ROOT / 'scripts/model-variants.sh'), name[2:]],
                             check=True, capture_output=True, text=True).stdout
     prompt = prompt.removeprefix('-DPS5LM_MODEL_PROMPT="').removesuffix('"').replace('\\n', '\n')
-    return {'model_run': None, 'reference': f'build/native-{name}/gen/model-reference.h', 'prompt': prompt}
+    # A long-context entry (NAME-cNk[-kvqN], docs/PORTING.md "Long context") checks against its base
+    # entry's CPU reference: the short prompt does not depend on the context size.
+    base = re.sub(r'-c\d+k(-kvq[48])?$', '', name)
+    return {'model_run': None, 'reference': f'build/native-{base}/gen/model-reference.h', 'prompt': prompt}
 
 
 def main():
@@ -189,6 +198,9 @@ def main():
     ap.add_argument('--out', default=None)
     ap.add_argument('--model-run', default=None, help='model-mode run directory (test-results/ps5/PPSA99041/<time>)')
     ap.add_argument('--soak', type=int, default=0, help='N short completions in a row at the end (0: none)')
+    ap.add_argument('--soak-mix', action='store_true',
+                    help='soak with short and medium prompts alternating and sampled (float) settings, every '
+                         'request timed with its server timings and wall-clock time')
     args = ap.parse_args()
     if not args.host:
         raise SystemExit('set PS5_HOST or pass --host')
@@ -298,7 +310,41 @@ def main():
 
     # Many requests in a row (upstream saw a decision model stop after ~55):
     # one bounded series, every answer and its time recorded.
-    if args.soak:
+    if args.soak and args.soak_mix:
+        # Mixed soak (docs/PORTING.md "Long context", the 9B stall): even requests are the
+        # short prompt (8 tokens), odd ones a medium prompt (~600 tokens of the benchmark
+        # passage plus a question, 64 tokens); all sampled with float settings and a fixed
+        # seed per request. A request over 10x the median is listed with its time.
+        medium = v['prompt'].replace('In a short paragraph, explain how a GPU differs from a CPU.',
+                                     MEDIUM_TEXT + '\n\nIn two sentences, what limits text generation speed?') \
+            if 'In a short paragraph, explain how a GPU differs from a CPU.' in v['prompt'] else MEDIUM_TEXT
+        rows, failures = [], []
+        for i in range(args.soak):
+            body = {'prompt': v['prompt'] if i % 2 == 0 else medium, 'n_predict': 8 if i % 2 == 0 else 64,
+                    'temperature': 0.7, 'top_p': 0.9, 'min_p': 0.05, 'repeat_penalty': 1.05, 'seed': 1000 + i,
+                    'cache_prompt': False}
+            at = datetime.datetime.now().isoformat(timespec='milliseconds')
+            try:
+                status, comp, wall = request(base, '/completion', body, timeout=120)
+                t = (comp or {}).get('timings') or {}
+                rows.append({'i': i, 'kind': 'short' if i % 2 == 0 else 'medium', 'at': at, 'status': status,
+                             'wall_s': round(wall, 3), 'prompt_n': t.get('prompt_n'), 'prompt_ms': t.get('prompt_ms'),
+                             'predicted_n': t.get('predicted_n'), 'predicted_ms': t.get('predicted_ms')})
+                if status != 200 or not (comp or {}).get('content'):
+                    failures.append({'request': i, 'status': status, 'at': at})
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                failures.append({'request': i, 'error': str(e), 'at': at})
+                break
+        walls = [r['wall_s'] for r in rows]
+        med = {k: sorted(r['wall_s'] for r in rows if r['kind'] == k)[len([r for r in rows if r['kind'] == k]) // 2]
+               for k in ('short', 'medium') if any(r['kind'] == k for r in rows)}
+        slow = [r for r in rows if r['wall_s'] > 10 * med[r['kind']]]
+        result['soak'] = {'requested': args.soak, 'completed': len(rows), 'failures': failures, 'mix': True,
+                          'median_wall_s': med, 'over_10x_median': slow, 'max_wall_s': max(walls) if walls else None,
+                          'requests': rows}
+        check('soak_mix', not failures and len(rows) == args.soak, completed=len(rows), failures=failures[:3],
+              median_wall_s=med, max_wall_s=max(walls) if walls else None, over_10x_median=len(slow))
+    elif args.soak:
         times, failures = [], []
         for i in range(args.soak):
             try:

@@ -28,6 +28,10 @@ static atomic_uint submissions;
 static atomic_ullong perf_dispatches, perf_submit_ns, perf_fence_waits, perf_fence_ns;
 static atomic_ullong perf_semaphore_waits, perf_semaphore_ns, perf_graphs, perf_graph_ns;
 static uint64_t graph_started; /* ggml computes graphs on one thread at a time */
+/* Longest single submit, fence wait, semaphore wait and graph since launch or the
+ * last ps5lm_vk_perf_reset_max (docs/PORTING.md "Long context": every wait must stay
+ * far below the 2 s bound, so the long-context runs read these after each request). */
+static atomic_ullong max_submit_ns, max_fence_ns, max_semaphore_ns, max_graph_ns;
 static uint64_t mono_ns(void)
 {
     struct timespec t;
@@ -35,6 +39,20 @@ static uint64_t mono_ns(void)
     return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
 }
 #define PERF_ADD(counter, value) atomic_fetch_add_explicit(&(counter), (value), memory_order_relaxed)
+static void perf_max(atomic_ullong *counter, unsigned long long value)
+{
+    unsigned long long seen = atomic_load_explicit(counter, memory_order_relaxed);
+    while (value > seen &&
+           !atomic_compare_exchange_weak_explicit(counter, &seen, value, memory_order_relaxed, memory_order_relaxed)) {
+    }
+}
+void ps5lm_vk_perf_reset_max(void)
+{
+    atomic_store(&max_submit_ns, 0);
+    atomic_store(&max_fence_ns, 0);
+    atomic_store(&max_semaphore_ns, 0);
+    atomic_store(&max_graph_ns, 0);
+}
 
 /* Runtime tuning knobs, read by patches/ggml-vulkan/0007 at the start of each
  * graph (fusion, graph optimisation, submit cadence) or at each mat-vec
@@ -98,7 +116,10 @@ void ps5lm_vk_graph_end(void)
 {
     const uint64_t end = mono_ns();
     PERF_ADD(perf_graphs, 1);
-    if (graph_started && end >= graph_started) PERF_ADD(perf_graph_ns, end - graph_started);
+    if (graph_started && end >= graph_started) {
+        PERF_ADD(perf_graph_ns, end - graph_started);
+        perf_max(&max_graph_ns, end - graph_started);
+    }
     graph_started = 0;
 }
 /* One JSON object: the counters since launch and the knobs. */
@@ -108,12 +129,14 @@ int ps5lm_vk_perf_json(char *out, size_t size)
     return snprintf(out, size,
         "{\"submissions\":%u,\"submit_ns\":%llu,\"dispatches\":%llu,\"fence_waits\":%llu,"
         "\"fence_wait_ns\":%llu,\"semaphore_waits\":%llu,\"semaphore_wait_ns\":%llu,"
-        "\"graphs\":%llu,\"graph_ns\":%llu,\"knobs\":{\"disable_fusion\":%lld,"
+        "\"graphs\":%llu,\"graph_ns\":%llu,\"max_submit_ns\":%llu,\"max_fence_wait_ns\":%llu,"
+        "\"max_semaphore_wait_ns\":%llu,\"max_graph_ns\":%llu,\"knobs\":{\"disable_fusion\":%lld,"
         "\"disable_graph_optimize\":%lld,\"nodes_per_submit\":%lld,\"submit_mflop\":%lld,"
         "\"dmmv_wg\":%lld,\"disable_mmvq\":%lld}}",
         atomic_load(&submissions), LOAD(perf_submit_ns), LOAD(perf_dispatches), LOAD(perf_fence_waits),
         LOAD(perf_fence_ns), LOAD(perf_semaphore_waits), LOAD(perf_semaphore_ns), LOAD(perf_graphs),
-        LOAD(perf_graph_ns), ps5lm_vk_knob(0), ps5lm_vk_knob(1), ps5lm_vk_knob(2), ps5lm_vk_knob(3),
+        LOAD(perf_graph_ns), LOAD(max_submit_ns), LOAD(max_fence_ns), LOAD(max_semaphore_ns),
+        LOAD(max_graph_ns), ps5lm_vk_knob(0), ps5lm_vk_knob(1), ps5lm_vk_knob(2), ps5lm_vk_knob(3),
         ps5lm_vk_knob(4), ps5lm_vk_knob(5));
 #undef LOAD
 }
@@ -261,8 +284,10 @@ static VkResult wait_fences(VkDevice d, uint32_t n, const VkFence *f, VkBool32 a
     VkResult rc = ((PFN_vkWaitForFences)device_proc(d, "vkWaitForFences"))
         (d, n, f, all, t < TIMEOUT ? t : TIMEOUT);
     if (rc != VK_SUCCESS) ps5lm_ops_fatal("ggml_fence_failed");
+    const uint64_t waited = mono_ns() - started;
     PERF_ADD(perf_fence_waits, 1);
-    PERF_ADD(perf_fence_ns, mono_ns() - started);
+    PERF_ADD(perf_fence_ns, waited);
+    perf_max(&max_fence_ns, waited);
     return rc;
 }
 static VkResult wait_semaphores(VkDevice d, const VkSemaphoreWaitInfo *i, uint64_t t)
@@ -271,8 +296,10 @@ static VkResult wait_semaphores(VkDevice d, const VkSemaphoreWaitInfo *i, uint64
     VkResult rc = ((PFN_vkWaitSemaphores)device_proc(d, "vkWaitSemaphores"))
         (d, i, t < TIMEOUT ? t : TIMEOUT);
     if (rc != VK_SUCCESS) ps5lm_ops_fatal("ggml_semaphore_failed");
+    const uint64_t waited = mono_ns() - started;
     PERF_ADD(perf_semaphore_waits, 1);
-    PERF_ADD(perf_semaphore_ns, mono_ns() - started);
+    PERF_ADD(perf_semaphore_ns, waited);
+    perf_max(&max_semaphore_ns, waited);
     return rc;
 }
 static _Noreturn VkResult device_idle(VkDevice d)
@@ -303,7 +330,9 @@ static VkResult submit(VkQueue q, uint32_t n, const VkSubmitInfo *i, VkFence f)
     const uint64_t started = mono_ns();
     VkResult rc = real_submit(q, n, i, f);
     if (rc != VK_SUCCESS) ps5lm_ops_fatal("ggml_submit_failed");
-    PERF_ADD(perf_submit_ns, mono_ns() - started);
+    const uint64_t took = mono_ns() - started;
+    PERF_ADD(perf_submit_ns, took);
+    perf_max(&max_submit_ns, took);
     ps5lm_ops_submission(true);
     return rc;
 }

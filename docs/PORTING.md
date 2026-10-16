@@ -2480,6 +2480,194 @@ The large mat-vec workgroup (`DMMV_WG=1`, the other half of ProsperoAI's `ps5pro
 was measured slower before ("Performance: measured tuning"). `RM_STDQ` matters only for
 Q4_0/Q8_0 weights, which this model has none of; not run.
 
+### Long context (2026-10-16)
+
+Every earlier test used at most 2048 tokens of context (model mode 1024, server 2048), F16 KV,
+flash attention with the scoped FP32 attention shader (`patches/ggml-vulkan/0004`), prompt
+chunks of 512, a 2 s bound on every fence and semaphore wait, and RADV's ~10 s device-lost
+watchdog per submit. This section takes three models up a ladder of contexts, 4k → 8k →
+16k → 32k (→ 64k for the `qwen35` models), one server build and one window per rung.
+Written before the first long-context run; each rung's numbers are added before its run.
+
+**Builds.** A long-context rung is an entry `NAME-cNk[-kvq8|-kvq4]` in
+`scripts/model-variants.sh` (`ps5lm_long_context`): the base entry's pin, prompt, weights cap
+and allocation caps, with this rung's server context (`PS5LM_SERVER_CTX`), KV cache type
+(`PS5LM_SERVER_KV`, checked by the context wrap like every other setting), context and total
+caps, serving window and default prompt chunk (`PS5LM_SERVER_PROMPT_BATCH`). Built as
+`server-m-NAME-cNk`. Everything else is the server mode of "LAN API" (`-b`/`-ub` 512, one
+slot, flash attention on, no mmap, `--cache-ram 0`, `--ctx-checkpoints 0`).
+
+**KV cache per token**, from the GGUFs (layers with a KV cache × KV heads × head size × 2 for
+K and V × bytes per element; F16 2 bytes, q8_0 34/32, q4_0 18/32):
+
+| Model | Layers with KV | KV heads × head size | F16 per token | 4k | 8k | 16k | 32k | 64k |
+|---|---|---|---|---|---|---|---|---|
+| Qwen3.5 9B Q4_K_M (`qwen35`) | 8 of 32 (every 4th) | 4 × 256 | 32 KiB | 128 MiB | 256 | 512 | 1024 | 2048 |
+| Llama 3.2 3B Q4_K_M (`llama`) | 28 of 28 | 8 × 128 | 112 KiB | 448 MiB | 896 | 1792 | 3584 | (7168) |
+| Qwen3.8 27B UD-IQ2_XXS (`qwen35`) | 16 of 64 | 4 × 256 | 64 KiB | 256 MiB | 512 | 1024 | 2048 | 4096; q8_0 2176, q4_0 1152 |
+
+Checked on the Mac (same pin, CPU, `llama_init_from_model` with flash attention, batch 512):
+the KV buffers are exactly these; the recurrent state does not depend on the context (9B
+50.25 MiB, 27B 149.6 MiB); the CPU compute buffer barely moves (9B 511 → 509 MiB from 2k to
+32k, 27B 517 → 569 from 2k to 64k, Llama 262.5 at 2k and 32k: the logits of a 512-token
+batch dominate it). The attention mask (`n_kv × 512` F16, 1 KiB per context token) is the
+part that grows; it is counted twice (device and host copy) below.
+
+**Budget per rung** (MiB). Model: the server's measured context at 2048 (9B 643, Llama 340,
+27B 992) plus the KV for the extra tokens plus 2 KiB per extra token; the peak likewise from
+the measured server peak at 2048 (9B 6277, Llama 2751, 27B 8194). Caps: context = expected
+× 1.15 + 128, total = expected peak + 15 % of the context + 256, rounded up to 128, and never
+above 10624 (the device-memory rule's limit, ~10.4 GiB: 1 GiB of RADV's ~11.4 GiB free).
+Weights caps are the base entries' (9B 6144, Llama 2816, 27B 7424). Every cap is far under
+twice the model's last pass (9B 7680, Llama 4096, 27B 9216), so the stepped rule holds for
+every rung; a failed rung ends that model's ladder at its last pass.
+
+| Rung | KV | Context expected / cap | Peak expected / total cap |
+|---|---|---|---|
+| 9B 4k | F16 128 | 711 / 1024 | 6345 / 6784 |
+| 9B 8k | F16 256 | 847 / 1152 | 6481 / 6912 |
+| 9B 16k | F16 512 | 1119 / 1536 | 6753 / 7296 |
+| 9B 32k | F16 1024 | 1663 / 2048 | 7297 / 7808 |
+| 9B 64k | F16 2048 | 2751 / 3328 | 8385 / 9088 |
+| Llama 4k | F16 448 | 568 / 896 | 2979 / 3328 |
+| Llama 8k | F16 896 | 1024 / 1408 | 3435 / 3968 |
+| Llama 16k | F16 1792 | 1936 / 2432 | 4347 / 4992 |
+| Llama 32k | F16 3584 | 3760 / 4480 | 6171 / 7040 |
+| 27B 4k | F16 256 | 1124 / 1536 | 8326 / 8832 |
+| 27B 8k | F16 512 | 1388 / 1792 | 8590 / 9088 |
+| 27B 16k | F16 1024 | 1916 / 2432 | 9118 / 9728 |
+| 27B 32k | F16 2048 | 2972 / 3328 | 10174 / 10624 (the limit; 450 margin) |
+| 27B 64k | F16 4096 | 5084 | 12286: **does not fit** |
+| 27B 64k | q8_0 2176 | 3164 / 3456 | 10366 / 10624 (258 margin) |
+| 27B 64k | q4_0 1152 | 2140 / 2688 | 9342 / 9984 |
+
+Llama 3.2 3B stops at 32k by the brief (its 64k would need 9.8 GiB of 10.4).
+
+**Quantized KV, only for the 27B at 64k.** F16 does not fit there. Checked offline on our pin:
+ggml-vulkan's `supports_op` for `FLASH_ATTN_EXT` accepts Q8_0 and Q4_0 K/V (the scalar and
+coopmat1 shaders dequantize in the shader), so no op falls back to the CPU. Order: q8_0 if the
+27B's 32k rung measures its context within 64 MiB of the model above (then the 64k q8_0 peak
+is expected ≤ 10368), otherwise q4_0. Before any long request, the same window checks the
+quantized cache at a short context: the 32-token completion of the model's usual prompt
+must pass the model mode's rule against a CPU reference made with the same KV type
+(`ps5-api-check.py`); a failure there ends the rung without a long request.
+
+**Submissions at depth.** On this device ggml-vk records a graph as several submits (every
+100 nodes or a flop share) and waits twice per graph: on the "almost ready" fence (~80 % of the
+nodes) and on the last one. So each wait is roughly the GPU time of most of one prompt chunk
+less what the CPU overlapped, and must stay under the 2 s bound; each submit is a fraction of
+a graph, far under the ~10 s device-lost watchdog. Attention per chunk grows linearly with
+depth: per 512-token chunk at depth D, 9B 8 layers × 16 heads × 4 × 256 × 512 × D = 67 MFLOP
+× D (0.26 TFLOP at 3.9k, 2.2 at 32k, 4.4 at 64k); Llama 28 × 24 × 4 × 128 × 512 × D = 176 MFLOP
+× D; 27B 16 × 24 × 4 × 256 × 512 × D = 201 MFLOP × D. At depth 0 a 512-token chunk takes about
+0.84 s (9B, 609 tok/s), 0.33 s (Llama, 1555 tok/s) and 2.6 s (27B, 200 tok/s: so the 27B's
+waits were already close to the bound at 2048).
+- The title now records the **longest single submit, fence wait, semaphore wait and graph**
+  (`ggml-dispatch.c`, in `GET /ps5lm/stats` as `max_*_ns`; `POST /ps5lm/knobs
+  {"reset_max":1}` restarts them), and `ps5-api-longctx.py` reads them around every request.
+- **Rule:** every measured wait ≤ 1.0 s (half the bound) is the target; a measured wait above
+  1.5 s stops the long requests in that window (and the rung fails). Before the full-length
+  requests of a rung, a probe at half the rung's length (a length the previous rung passed)
+  measures the longest wait; the full length's is predicted linearly in depth from it and from
+  the depth-0 512-token request, and if it exceeds 1.0 s the prompt chunk is lowered for that
+  window (`prompt_batch` knob, in proportion, a multiple of 64; under 64 the rung stops).
+  Before each rung the previous rung's measured waits are written here with the prediction.
+- **27B:** prompt chunk 256 from its first rung (half its 2.6 s depth-0 graph), by default in
+  its builds.
+
+**Checks per rung (one window).** `scripts/ps5-api-longctx.py` (new): depth 0 (128-token prompt
+and 128 generated, then the benchmark passage's 512 tokens with the top-10
+log-probabilities); the half-length timing probe; then the **needle in a haystack**: a
+deterministic filler (invented sentences from a seeded generator, no outside text) of the
+rung's length less 192 tokens, with one passcode sentence at 10 %, 50 % or 90 % of it and the
+question at the end, temperature 0. 10 %: 32 tokens; 50 %: 32 tokens with the top-10
+log-probabilities; 90 %: 128 tokens with `ignore_eos`, which is also the **depth benchmark**
+(prompt tok/s over the full length, generation tok/s at depth; one prefill instead of two at
+the long rungs); retrieved = the passcode in the answer (up to the first end-of-generation
+token, at most 32 tokens). Then `ps5-api-check.py` (correctness at a short prompt against the
+base entry's CPU reference, floats, Anthropic, template). The prompts are built on the Mac
+first against the CPU rehearsal of the same entry (`host-server-rehearsal.sh` now takes
+`m-NAME` entries) and the console run checks that its token ids are identical.
+`scripts/ps5-api-bench.py --depth N` does the same benchmark with the benchmark passage
+(defaults unchanged).
+
+**Logit check against the CPU** (rungs 8k and 16k, also recorded at 4k): the 50 % needle prompt
+and the 512-token benchmark prompt, on the host CPU rehearsal (same pin and patches, CPU
+backend; 8 threads instead of the title's 2, which changes only the rounding order of the
+CPU's single-token attention, split by thread over the KV) and on the console:
+- top-1 equal, or the CPU's top two within 0.5;
+- at least 8 of the CPU's top-10 tokens in the GPU's top 10;
+- the largest |GPU − CPU| log-probability over the CPU's top 10 at the first generated
+  token within the tolerance;
+- the 32-token greedy continuation by the model mode's rule (first 8 identical, or the first
+  difference where the CPU's top two are within 0.5).
+Log-probabilities (the server's `n_probs`, log-softmax of the raw logits) are compared rather
+than logits: the same differences up to one constant per position, and the server reports
+nothing else. **Tolerance:** 3 × the Mac's Metal stand-in's difference from the CPU on the
+same prompt and rung (as for vision), rounded up to 0.1, measured before the console run.
+Measured for 9B at 4k: Metal vs CPU 0.377 (512-token prompt) and 0.496 (needle at 50 %),
+top-1 equal, tokens identical → **tolerance 1.5**. The 27B's CPU reference at 8k may be slow;
+Metal as the stand-in is allowed if recorded as such.
+
+**The 9B stall soak.** In the 9B's 4k window: `ps5-api-check.py --soak 200 --soak-mix`
+(new, the default soak unchanged): short (8 tokens) and medium (~600-token prompt, 64
+tokens) requests alternating, sampled with float settings (temperature 0.7, top_p 0.9,
+min_p 0.05, repeat_penalty 1.05, a fixed seed per request), each with its wall-clock time and
+the server's timings; any request over 10 × the median of its kind is listed for the klog.
+
+#### Rungs, as run
+
+- **9B 4k** (written before the run): eboot `d91495ad…8756`, context cap 1024, total 6784,
+  window 900 s (watchdog 180 + 900 + 60 + 60 = 1200 s, `-t 1320`), chunk 512. Timing: deepest
+  chunk at depth ~3.4k: +0.23 TFLOP of attention on a 0.84 s depth-0 chunk; the half-length
+  probe decides the chunk. Tolerance 1.5. The 200-request mixed soak runs in this window.
+  **Result:** pass (`…/PPSA99041/20261016-130106/`): needles 3/3; logit check 0.367 / 0.596;
+  longest graph 0.920 s at 3.9k (0.875 at depth 0: ~12 µs per token of depth per 512-token
+  chunk), longest wait 0.206 s (a blocking submit; fence waits about the same); context
+  +712 MiB (expected 711), peak 6359 MiB. Soak 200/200, nothing over 10 × the median.
+- **9B 8k** (written before the run): eboot `c3caab96…ba85`, context cap 1152, total 6912,
+  window 900 s (`-t 1320`), chunk 512. Timing from the 4k rung: longest graph at 8.0k
+  predicted 0.875 + 8.0k × 11.6 µs = 0.97 s, waits ~0.25 s. Metal stand-in at 8k: 0.377
+  (512-token prompt, the same as at 4k) and 0.882 (needle at 50 %, 9 of the CPU's top 10 in
+  Metal's) → **tolerance 2.7**.
+  **Result:** pass (`…/20261016-131403/`): needles 3/3; logit check 0.367 / 1.009 (≤ 2.7);
+  longest graph **1.146 s** against the 0.975 predicted: the attention cost per token of depth
+  steepens (~12 µs per token below 4k, ~55 µs from 4k to 8k, per 512-token chunk), so the
+  linear prediction from depth 0 underestimates. Longest wait 0.268 s (waits stay about a
+  quarter of the graph: ggml-vk splits a graph into submits by flops, attention included, and
+  on this driver `vkQueueSubmit` blocks while earlier work runs). Context +849 MiB (847
+  expected), peak 6498 MiB.
+- **Prediction from here on:** the longest graph at the new full length = the half-length
+  probe's (the previous rung's length) + 1.5 × the marginal slope measured between the last
+  two rungs × the extra depth (`--slope-us`); the chunk is lowered when that exceeds 1.6 s.
+- **9B 16k** (written before the run): eboot `f9732934…3b03`, context cap 1536, total 7296,
+  window 900 s (`-t 1320`), chunk 512 by default. Timing: half-length probe at 8.1k ≈ 1.15 s;
+  slope 1.5 × 55 µs = 83 µs per token → longest graph at 16.2k predicted ≈ 1.82 s > 1.6, so
+  the client is expected to lower the chunk to 448 (waits then ~0.3 s). Metal stand-in at 16k:
+  0.377 / 0.605 → **tolerance 1.9**. CPU reference 16k: needle at 50 % retrieved.
+  **Result:** pass (`…/20261016-132613/`): the probe's graph at 8.1k was 1.148 s, the
+  prediction 1.82 s, so the client lowered the chunk to 448; needles 3/3; logit check 0.367 /
+  0.490 (≤ 1.9); longest graph 1.440 s at chunk 448, wait 0.343 s; context +1121 MiB (1119
+  expected), peak 6776 MiB. Cost per prompt token of a chunk: 1.71 ms at depth 0, 1.80 at
+  3.9k, 2.24 at 8k, 3.21 at 16.2k: about 0.118 µs more per token of depth above 4k.
+- **9B 32k** (written before the run): eboot `b7151b31…a1c`, context cap 2048, total 7808,
+  window 1200 s (watchdog 1500 s, `-t 1620`), **chunk 256 by default** (at 512 even the 16k
+  probe would take ~1.64 s per graph). Prediction: 5.15 ms per chunk token at 32.6k → longest
+  graph ~1.32 s at chunk 256 (the client's bound with 1.5 × the slope: 1.55 s); waits ~0.35 s.
+  No logit check at this rung (8k and 16k only); prompt ids from the CPU rehearsal.
+  **Result:** pass (`…/20261016-133108/`): needles 3/3; longest graph 1.317 s at chunk 256
+  (predicted 1.32), wait 0.334 s; pp 312 tok/s over 32.6k tokens; context +1665 MiB (1663
+  expected), peak 7321 MiB.
+- **9B 64k** (written before the run): eboot `d553cff1…ef94`, context cap 3328, total 9088
+  (expected peak 8385; under 2 × the 32k rung's 7808), window 2400 s (watchdog 2700 s,
+  `-t 2820`), **chunk 128**. Prediction: 9.0 ms per chunk token at 65.3k → longest graph
+  ~1.15 s (client bound 1.41 s); each 65k prefill ~380 s at ~170 tok/s, so the window holds
+  the probe, three needles and the checks with ~15 minutes to spare.
+  **Result:** pass (`…/20261016-133933/`): needles 3/3 over 65.3k tokens; longest graph 0.822 s
+  at chunk 128 (predicted 1.15: the cost per prompt token at depth is lower at small chunks),
+  wait 0.199 s; pp 278 tok/s; context +2758 MiB (2751 expected), peak 8418 MiB. **The 9B's
+  ladder is complete: 4k to 64k, F16 KV.**
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

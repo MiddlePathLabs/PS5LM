@@ -58,6 +58,24 @@ applied the same rule to the API's tokens (PORTING.md "Measured models"). Not ru
 E4B QAT (needs a 2.2 GiB single host allocation for its per-layer embedding table; a budget
 decision first), Qwen3.8 9B Distill and BoHF 12B MoE (no console runs left this session).
 
+## Long context on this console
+
+Server mode, one build and one window per context ([PORTING.md](PORTING.md#long-context-2026-10-16)).
+Needle: a passcode in a generated filler of the context's length less 192 tokens, at 10 / 50 /
+90 % of it, asked for at temperature 0. Logit check (8k and 16k; also recorded at 4k): the
+largest |GPU − CPU| log-probability over the CPU's top 10 at the first generated token, on the
+50 % needle prompt, against 3 × the Mac's Metal stand-in, with top-1 and the greedy tokens
+by the usual rule. Prompt tok/s over the full prompt; generation tok/s for 128 tokens after
+it ("at depth") and after a 128-token prompt ("at 0"). Chunk = prompt tokens per graph.
+
+| Model | Context (prompt) | KV | Chunk | Peak / cap MiB | Needle 10 / 50 / 90 % | Logit check (diff / tol, tokens) | pp tok/s at full length | tg tok/s at depth / at 0 | Evidence (`test-results/ps5/`) |
+|---|---|---|---|---|---|---|---|---|---|
+| Qwen3.5 9B Q4_K_M | 4k (3884) | F16 | 512 | 6359 / 6784 | yes / yes / yes | 0.60 / 1.5, identical | 580 | 66.4 / 67.6 | `PPSA99041/20261016-130106/`, `api-longctx/20261016-130156/` |
+| Qwen3.5 9B Q4_K_M | 8k (7993) | F16 | 512 | 6498 / 6912 | yes / yes / yes | 1.01 / 2.7, identical | 522 | 65.4 / 67.6 | `PPSA99041/20261016-131403/`, `api-longctx/20261016-131522/` |
+| Qwen3.5 9B Q4_K_M | 16k (16189) | F16 | 448 | 6776 / 7296 | yes / yes / yes | 0.49 / 1.9, identical | 428 | 61.6 / 67.6 | `PPSA99041/20261016-132613/`, `api-longctx/20261016-132850/` |
+| Qwen3.5 9B Q4_K_M | 32k (32575) | F16 | 256 | 7321 / 7808 | yes / yes / yes | – | 312 | 56.9 / 67.4 | `PPSA99041/20261016-133108/`, `api-longctx/20261016-133727/` |
+| Qwen3.5 9B Q4_K_M | 64k (65329) | F16 | 128 | 8418 / 9088 | yes / yes / yes | – | 278 | 48.9 / 67.4 | `PPSA99041/20261016-133933/`, `api-longctx/20261016-135305/` |
+
 ## Fits for sure (up to 6 GiB)
 
 | Model | Ollama name | Quant | Size | Architecture | Notes |

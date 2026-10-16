@@ -77,6 +77,7 @@ static int ps5lm_vk_set_knob(const char *name, long long value)
         if (std::strcmp(name, host_knob_names[i]) == 0) { host_knobs[i].store(value); return 0; }
     return -1;
 }
+static void ps5lm_vk_perf_reset_max(void) {}
 static int ps5lm_vk_perf_json(char *out, size_t size)
 {
     return std::snprintf(out, size, "{\"host_rehearsal\":true,\"knobs\":{\"disable_fusion\":%lld,"
@@ -99,6 +100,7 @@ extern "C" void ps5lm_report_allocations(void);
 extern "C" uint64_t ps5lm_elapsed_ms(void);
 extern "C" int ps5lm_vk_set_knob(const char *name, long long value);
 extern "C" int ps5lm_vk_perf_json(char *out, size_t size);
+extern "C" void ps5lm_vk_perf_reset_max(void);
 #define MODEL_PATH PS5LM_MODEL_PATH
 #if defined(PS5LM_MODEL_VISION)
 #define MMPROJ_PATH PS5LM_MMPROJ_PATH
@@ -171,7 +173,11 @@ extern "C" int ps5lm_server_prompt_batch(int n_batch)
 extern "C" int ps5lm_server_set_knob(const char *name, long long value)
 {
     if (!name) return -1;
-    if (std::strcmp(name, "prompt_batch") == 0) {
+    if (std::strcmp(name, "reset_max") == 0) {
+        /* The longest submit/wait/graph counters start again (long-context runs). */
+        if (value != 1) return -2;
+        ps5lm_vk_perf_reset_max();
+    } else if (std::strcmp(name, "prompt_batch") == 0) {
         if (value == -1) value = PS5LM_SERVER_PROMPT_BATCH;
         if (value < 1 || value > PS5LM_SERVER_BATCH) return -2;
         prompt_batch.store(int(value));
@@ -189,7 +195,7 @@ extern "C" int ps5lm_server_set_knob(const char *name, long long value)
 
 extern "C" int ps5lm_server_stats(char *out, size_t size)
 {
-    char vk[1024];
+    char vk[1536];
     const int n = ps5lm_vk_perf_json(vk, sizeof vk);
     if (n <= 0 || size_t(n) >= sizeof vk) return -1;
     return std::snprintf(out, size, "{\"vk\":%s,\"prompt_batch\":%d,\"context_batch\":%d,\"knob_sets\":%u,"
@@ -258,8 +264,8 @@ static void check_context_params(const llama_context_params &params)
     if (params.n_ctx != PS5LM_SERVER_CTX || params.n_batch != PS5LM_SERVER_BATCH ||
         params.n_ubatch != PS5LM_SERVER_BATCH || params.n_seq_max != 1 ||
         params.n_threads != PS5LM_MODEL_THREADS || params.n_threads_batch != PS5LM_MODEL_THREADS ||
-        params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED || params.type_k != GGML_TYPE_F16 ||
-        params.type_v != GGML_TYPE_F16 || !params.offload_kqv || params.op_offload)
+        params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED || params.type_k != PS5LM_SERVER_KV_GGML ||
+        params.type_v != PS5LM_SERVER_KV_GGML || !params.offload_kqv || params.op_offload)
         ps5lm_ops_fatal("server_context_params");
 }
 
@@ -355,7 +361,7 @@ static const char *const args[] = {
     "-ngl", "999", "-c", STR(PS5LM_SERVER_CTX), "-b", STR(PS5LM_SERVER_BATCH),
     "-ub", STR(PS5LM_SERVER_BATCH), "-np", "1",
     "-t", STR(PS5LM_MODEL_THREADS), "-tb", STR(PS5LM_MODEL_THREADS),
-    "-fa", "on", "-ctk", "f16", "-ctv", "f16", "--no-op-offload", "--no-repack",
+    "-fa", "on", "-ctk", PS5LM_SERVER_KV, "-ctv", PS5LM_SERVER_KV, "--no-op-offload", "--no-repack",
     "-lm", "none", "-lzm", "off", "-fit", "off",
     "--no-webui", "--cache-ram", "0", "--ctx-checkpoints", "0",
     "--threads-http", PS5LM_SERVER_HTTP_THREADS, "--log-colors", "off",

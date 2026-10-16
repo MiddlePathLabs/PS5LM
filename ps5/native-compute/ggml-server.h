@@ -34,7 +34,15 @@
  * that); the prompt chunk the server actually decodes at a time is a runtime
  * knob (POST /ps5lm/knobs "prompt_batch", 1..512), PS5LM_SERVER_PROMPT_BATCH
  * by default. The model mode's batches were 32 (docs/PORTING.md "Performance"). */
+#ifndef PS5LM_SERVER_CTX /* long-context builds set their own (docs/PORTING.md "Long context") */
 #define PS5LM_SERVER_CTX 2048
+#endif
+/* The KV cache type, K and V alike: F16, or a quantized type only where
+ * docs/PORTING.md "Long context" allows it. */
+#ifndef PS5LM_SERVER_KV
+#define PS5LM_SERVER_KV "f16"
+#define PS5LM_SERVER_KV_GGML GGML_TYPE_F16
+#endif
 #define PS5LM_SERVER_BATCH 512
 #ifndef PS5LM_SERVER_PROMPT_BATCH
 #define PS5LM_SERVER_PROMPT_BATCH 512 /* 32 in the first tuning runs */

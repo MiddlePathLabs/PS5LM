@@ -14,10 +14,51 @@ mv_prompt_mistral='[INST] In a short paragraph, explain how a GPU differs from a
 mv_prompt_minicpm5='<s><|im_start|>user\nIn a short paragraph, explain how a GPU differs from a CPU.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
 mv_prompt_granite4='<|start_of_role|>user<|end_of_role|>In a short paragraph, explain how a GPU differs from a CPU.<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>'
 
+# Long-context server builds (docs/PORTING.md "Long context"): NAME-cNk[-kvq8|-kvq4] is the
+# entry NAME with a larger server context, its own context and total caps (written in
+# PORTING.md before the first run of each), the KV cache type, the serving window and the
+# prompt chunk the server decodes at a time. Server builds only (server-m-NAME-cNk).
+ps5lm_long_context() {
+    lc_kv=f16; lc_pbatch=512; lc_window=600
+    case "$1" in
+        # MiB:                          base               ctx    context total  window chunk
+        # Host rehearsal only (never built for the console): 6 KV layers, 24 KiB per token.
+        qwen35-0.8b-c32k)  set -- qwen35-0.8b 32768 2048 3072 600 512 ;;
+        qwen35-9b-c4k)     set -- qwen35-9b 4096 1024 6784 900 512 ;;
+        qwen35-9b-c8k)     set -- qwen35-9b 8192 1152 6912 900 512 ;;
+        qwen35-9b-c16k)    set -- qwen35-9b 16384 1536 7296 900 512 ;;
+        qwen35-9b-c32k)    set -- qwen35-9b 32768 2048 7808 1200 256 ;;
+        qwen35-9b-c64k)    set -- qwen35-9b 65536 3328 9088 2400 128 ;;
+        llama32-3b-c4k)    set -- llama32-3b 4096 896 3328 600 512 ;;
+        llama32-3b-c8k)    set -- llama32-3b 8192 1408 3968 600 512 ;;
+        llama32-3b-c16k)   set -- llama32-3b 16384 2432 4992 900 512 ;;
+        llama32-3b-c32k)   set -- llama32-3b 32768 4480 7040 1200 512 ;;
+        qwen38-27b-iq2xxs-c4k)  set -- qwen38-27b-iq2xxs 4096 1536 8832 900 256 ;;
+        qwen38-27b-iq2xxs-c8k)  set -- qwen38-27b-iq2xxs 8192 1792 9088 900 256 ;;
+        qwen38-27b-iq2xxs-c16k) set -- qwen38-27b-iq2xxs 16384 2432 9728 1200 256 ;;
+        qwen38-27b-iq2xxs-c32k) set -- qwen38-27b-iq2xxs 32768 3328 10624 1800 256 ;;
+        qwen38-27b-iq2xxs-c64k-kvq8) set -- qwen38-27b-iq2xxs 65536 3456 10624 2400 256; lc_kv=q8_0 ;;
+        qwen38-27b-iq2xxs-c64k-kvq4) set -- qwen38-27b-iq2xxs 65536 2688 9984 2400 256; lc_kv=q4_0 ;;
+        *) echo "Unknown long-context entry: $1" >&2; return 2 ;;
+    esac
+    lc_base=$1; lc_ctx=$2; lc_context=$3; lc_total=$4; lc_window=$5; lc_pbatch=$6
+}
+
 ps5lm_model_variant() {
     local name=$1 workload prompt weights context total submit=16384 watchdog=300 load=180
-    local alloc_mib='' buffer=''
+    local alloc_mib='' buffer='' base=$1
+    lc_ctx=''
     case "$name" in
+        *-c[0-9]*k|*-c[0-9]*k-kvq[48]) ps5lm_long_context "$name" || return 2; base=$lc_base ;;
+    esac
+    case "$base" in
+        qwen35-0.8b)
+            # The first dense model (build modes model/server-qwen), as an entry for the host
+            # rehearsals of long contexts (docs/PORTING.md "Long context"); caps as server-qwen.
+            mv_repo=unsloth/Qwen3.5-0.8B-GGUF; mv_revision=6ab461498e2023f6e3c1baea90a8f0fe38ab64d0
+            mv_file=Qwen3.5-0.8B-Q4_K_M.gguf; mv_bytes=532517120
+            mv_sha256=bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517
+            prompt=$mv_prompt_qwen_nothink; weights=1152; context=768; total=2048; submit=8192 ;;
         qwen35-9b)
             mv_repo=unsloth/Qwen3.5-9B-GGUF; mv_revision=3885219b6810b007914f3a7950a8d1b469d598a5
             mv_file=Qwen3.5-9B-Q4_K_M.gguf; mv_bytes=5680522464
@@ -74,6 +115,10 @@ ps5lm_model_variant() {
             prompt=$mv_prompt_granite4; weights=4608; context=1024; total=6144; submit=16384 ;;
         *) echo "Unknown measured model: $name" >&2; return 2 ;;
     esac
+    if [ -n "$lc_ctx" ]; then
+        # The base entry's pin, prompt, weights cap and allocation caps; this context's caps.
+        context=$lc_context; total=$lc_total
+    fi
     workload="model-$name-greedy"
     mv_flags=(-DPS5LM_MODEL_CUSTOM "-DPS5LM_GGML_WORKLOAD=\"$workload\"" "-DPS5LM_SERVER_WORKLOAD_NAME=\"server-$name\""
         "-DPS5LM_MODEL_FILE=\"$mv_file\"" "-DPS5LM_MODEL_BYTES=${mv_bytes}ull"
@@ -88,5 +133,11 @@ ps5lm_model_variant() {
     fi
     if [ -n "$buffer" ]; then
         mv_flags+=("-DPS5LM_MODEL_VK_MAX_BUFFER=\"$buffer\"")
+    fi
+    if [ -n "$lc_ctx" ]; then
+        local kv_ggml
+        case "$lc_kv" in f16) kv_ggml=GGML_TYPE_F16 ;; q8_0) kv_ggml=GGML_TYPE_Q8_0 ;; q4_0) kv_ggml=GGML_TYPE_Q4_0 ;; esac
+        mv_flags+=("-DPS5LM_SERVER_CTX=$lc_ctx" "-DPS5LM_SERVER_KV=\"$lc_kv\"" "-DPS5LM_SERVER_KV_GGML=$kv_ggml"
+            "-DPS5LM_SERVER_WINDOW_S=${lc_window}u" "-DPS5LM_SERVER_PROMPT_BATCH=$lc_pbatch")
     fi
 }

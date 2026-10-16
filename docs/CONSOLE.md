@@ -629,6 +629,21 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
     cosine 0.999984490), 47/47 tokens identical, HELLO; 5342 submissions and the 6458 MiB
     peak equal; 80.1 tok/s; mmproj load 12455 → 699 ms (`read(2)`). `…/PPSA99041/20261016-122253/`.
 
+- **2026-10-16, long context: Qwen3.5 9B Q4_K_M, 4k to 64k** (server builds
+  `server-m-qwen35-9b-cNk`, F16 KV; [PORTING.md](PORTING.md#long-context-2026-10-16)): five
+  runs, all pass, exit 0, closed, 0 HTTP errors. Needles at 10/50/90 % retrieved at every
+  context. Logit check against the host CPU: 0.60 (4k), 1.01 (8k), 0.49 (16k) against
+  tolerances 1.5 / 2.7 / 1.9, top-1 equal and the greedy tokens identical. Longest graph (one
+  prompt chunk) 0.92 / 1.15 / 1.44 / 1.32 / 0.82 s at chunks 512 / 512 / 448 / 256 / 128, the
+  longest single wait 0.21–0.34 s, never near the 2 s bound. Memory as modelled: context
+  +712 / 849 / 1121 / 1665 / 2758 MiB, peak 6359 / 6498 / 6776 / 7321 / 8418 MiB. Prompt
+  580 → 278 tok/s and generation 66.4 → 48.9 tok/s from 4k to 64k (67.5 at depth 0).
+  - 4k (`…/20261016-130106/`) also ran the **200-request mixed soak**: 200/200, short median
+    0.238 s, medium 2.255 s, max 2.528 s, none over 10 × the median (the run-3 stall of the
+    first 9B window was not seen again in 260 responses).
+  - Evidence: `…/PPSA99041/20261016-130106/`, `…/20261016-131403/`, `…/20261016-132613/`,
+    `…/20261016-133108/`, `…/20261016-133933/`; `api-longctx/` and `api-check/` of the same times.
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 
