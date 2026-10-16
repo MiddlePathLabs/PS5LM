@@ -299,6 +299,31 @@ server's is llama's decode timer with sampling. Prompt processing at 512 tokens
 is 16 batches of 32; larger batches were not tried. These are this console's
 numbers only, for this model and these settings.
 
+**Larger MoE models: the memory climb** (pins, budgets and the rule in
+[PORTING.md](PORTING.md#larger-moe-models-the-climb-pins-and-budgets-2026-10-15-late)).
+Same settings, pass rule and API check as above; each model is one model-mode
+run and one server-mode run with the benchmark.
+
+- **Step 1, Granite 3.1 3B-A800M Q4_K_M (total cap 3072 MiB): pass.** Model mode
+  (PID 183, eboot `e2601805…6ac2`): the first 20 greedy tokens equal the CPU
+  reference; the first difference is at token 20, where the CPU's top two
+  logits are 0.105 apart; text "A GPU (Graphics Processing Unit) and a CPU
+  (Central Processing Unit) are both essential components in computing
+  systems, but they serve distinct purposes and have different architectures".
+  33/33 offloaded, 2 splits (`Vulkan0` 1921.79 MiB, input embedding 59.07 MiB in
+  `Vulkan_Host`). Load 21.3 s (about 95 MB/s), weights +1986 MiB (cap 2304),
+  context +123 MiB (cap 384), direct peak 2181 MiB (cap 3072), Vulkan peak
+  2052 MiB, 0 after free; 2626 submissions; generation 117.6 tok/s on the
+  title's clock, prompt 44 tok/s. `test-results/ps5/PPSA99041/20261015-210939/`.
+  Server mode (PID 185, eboot `e8ffd463…7c36`): API check 9/9, the completion
+  identical to the model mode's GPU tokens; load 21.5 s, weights +2005 MiB,
+  context +184 MiB at 2048 tokens, direct peak 2294 MiB, Vulkan peak 2113 MiB,
+  0 after free, 23 responses, 0 errors, closed after `/ps5lm/shutdown`.
+  `…/PPSA99041/20261015-211035/`, `…/api-check/20261015-211038/`.
+  Benchmark (`…/api-bench/20261015-211113/`), medians (min–max): 128-token
+  prompt 711 (707–721) tok/s, generation 149.5 (148.7–149.7) tok/s; 512-token
+  prompt 709 (707–713) tok/s, generation 146.4 (146.2–147.5) tok/s.
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

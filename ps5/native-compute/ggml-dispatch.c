@@ -30,7 +30,7 @@ static atomic_uint submissions;
 #include "ggml-server.h"
 #define SUBMIT_LIMIT PS5LM_SERVER_SUBMIT_LIMIT
 #else
-#define SUBMIT_LIMIT 8192u
+#define SUBMIT_LIMIT PS5LM_MODEL_SUBMIT_LIMIT /* 8192 for the first models */
 #endif
 #define SUBMIT_BATCH_LIMIT 16u
 #define COMMAND_LIMIT 64u

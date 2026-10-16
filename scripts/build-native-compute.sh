@@ -13,8 +13,22 @@ case "$mode" in
     moe) work="$root/build/native-moe" ;;   # the model mode with the small MoE (PS5LM_MODEL_MOE)
     server) work="$root/build/native-server" ;;            # llama.cpp's server, Granite MoE
     server-qwen) work="$root/build/native-server-qwen" ;;  # llama.cpp's server, Qwen3.5 0.8B
-    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen]" >&2; exit 2 ;;
+    # The MoE climb (docs/PORTING.md "Larger MoE models"): model mode and server mode per step.
+    moe3b|olmoe|qwen3moe) work="$root/build/native-$mode" ;;
+    server-moe3b|server-olmoe|server-qwen3moe) work="$root/build/native-$mode" ;;
+    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen|moe3b|olmoe|qwen3moe|server-moe3b|server-olmoe|server-qwen3moe]" >&2; exit 2 ;;
 esac
+# Which model a model or server build loads: its define and its file (checked below).
+variant_flag=(); want=Qwen3.5-0.8B-Q4_K_M.gguf
+case "$mode" in
+    moe|server) variant_flag=(-DPS5LM_MODEL_MOE); want=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf ;;
+    moe3b|server-moe3b) variant_flag=(-DPS5LM_MODEL_GRANITE3B); want=granite-3.1-3b-a800m-instruct-Q4_K_M.gguf ;;
+    olmoe|server-olmoe) variant_flag=(-DPS5LM_MODEL_OLMOE); want=OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf ;;
+    qwen3moe|server-qwen3moe) variant_flag=(-DPS5LM_MODEL_QWEN3MOE); want=Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf ;;
+esac
+model_files=(Qwen3.5-0.8B-Q4_K_M.gguf granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
+    granite-3.1-3b-a800m-instruct-Q4_K_M.gguf OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf
+    Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf)
 app="$work/PPSA99041"
 sdk="${PS5_NATIVE_SDK:-$upstream/.deps/native/ps5-payload-sdk}"
 archive="${RADV_ARCHIVE:-$root/build/radv-preflight/radv-release/src/amd/vulkan/libvulkan_radeon.a}"
@@ -85,7 +99,9 @@ extra_objects=()
 extra_libraries=()
 compile_flags=()
 server=0
-case "$mode" in server|server-qwen) server=1 ;; esac
+case "$mode" in server*) server=1 ;; esac
+model_mode=0
+case "$mode" in model|moe|moe3b|olmoe|qwen3moe) model_mode=1 ;; esac
 if [ "$mode" != compute ]; then
     PS5LM_LLAMA_SERVER=$server PS5_NATIVE_SDK="$sdk" RADV_ARCHIVE="$archive" bash "$root/scripts/build-native-llama.sh"
     llama="$root/build/native-llama"
@@ -93,14 +109,12 @@ if [ "$mode" != compute ]; then
     runner=ggml-ops
     if [ "$server" = 1 ]; then
         # The model mode's runtime and caps, with llama.cpp's server as the workload.
-        compile_flags+=(-DPS5LM_GGML_MODEL -DPS5LM_GGML_SERVER)
-        [ "$mode" = server ] && compile_flags+=(-DPS5LM_MODEL_MOE)
+        compile_flags+=(-DPS5LM_GGML_MODEL -DPS5LM_GGML_SERVER ${variant_flag[@]+"${variant_flag[@]}"})
         runner=ggml-server
-    elif [ "$mode" = model ] || [ "$mode" = moe ]; then
+    elif [ "$model_mode" = 1 ]; then
         # The CPU reference comes first: scripts/build-host-model-reference.sh.
         [ -f "$work/gen/model-reference.h" ] || { echo "Missing $work/gen/model-reference.h" >&2; exit 2; }
-        compile_flags+=(-DPS5LM_GGML_MODEL)
-        [ "$mode" = moe ] && compile_flags+=(-DPS5LM_MODEL_MOE)
+        compile_flags+=(-DPS5LM_GGML_MODEL ${variant_flag[@]+"${variant_flag[@]}"})
         runner=ggml-model
     fi
     compile -std=c11 ${compile_flags[@]+"${compile_flags[@]}"} -I "$mesa/include" -I "$root/ps5/native-compute" \
@@ -149,7 +163,7 @@ if [ "$mode" != compute ]; then
         --defsym=vkCmdCopyBuffer=vk_common_CmdCopyBuffer
         --defsym=vkGetPhysicalDeviceFeatures2=vk_common_GetPhysicalDeviceFeatures2)
 fi
-if [ "$mode" = model ] || [ "$mode" = moe ] || [ "$server" = 1 ]; then
+if [ "$model_mode" = 1 ] || [ "$server" = 1 ]; then
     radv_link_flags+=(--defsym=posix_madvise=ps5lm_posix_madvise)
 fi
 net_compat=(getaddrinfo freeaddrinfo getnameinfo accept4 isatty getpwuid timegm readlink link symlink pathconf remove)
@@ -173,7 +187,7 @@ vk_local=''
 if [ "$mode" != compute ]; then
     vk_local='vkGetInstanceProcAddr; vkGetDeviceProcAddr; vkCmdCopyBuffer; vkGetPhysicalDeviceFeatures2;'
 fi
-if [ "$mode" = model ] || [ "$mode" = moe ] || [ "$server" = 1 ]; then
+if [ "$model_mode" = 1 ] || [ "$server" = 1 ]; then
     vk_local="$vk_local posix_madvise;"
 fi
 if [ "$server" = 1 ]; then
@@ -233,14 +247,15 @@ fi
 "$tool" self --extract --file "$app/eboot.bin" --out "$work/extracted.elf"
 "$tool" self --extract --file "$app/sce_module/libc.prx" --out "$work/libc-extracted.elf"
 bash "$upstream/tools/inspect.sh" "$work/eboot.elf" > "$work/native-structure.txt"
-if [ "$mode" = model ] || [ "$mode" = moe ] || [ "$server" = 1 ]; then
+if [ "$model_mode" = 1 ] || [ "$server" = 1 ]; then
     # Every object must name the same model: the title's setup check (main.c) and
     # the loader (ggml-model.cpp) once disagreed because a flag missed one of them.
-    want=Qwen3.5-0.8B-Q4_K_M.gguf; other=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
-    case "$mode" in moe|server) want=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf; other=Qwen3.5-0.8B-Q4_K_M.gguf ;; esac
     for object in "$work/obj/main.o" "$work/obj/$runner.o"; do
         strings "$object" | grep -qF "$want" || { echo "$object does not name $want" >&2; exit 2; }
-        if strings "$object" | grep -qF "$other"; then echo "$object names $other" >&2; exit 2; fi
+        for other in "${model_files[@]}"; do
+            [ "$other" = "$want" ] && continue
+            if strings "$object" | grep -qF "$other"; then echo "$object names $other" >&2; exit 2; fi
+        done
     done
 fi
 python3 "$root/scripts/validate-native-compute.py" "$work" "$sdk" "$archive" "$llvm" "$root"

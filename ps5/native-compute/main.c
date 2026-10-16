@@ -68,7 +68,8 @@
 /* Load + serving window + stop + margin (ggml-server.h), not unbounded. */
 #define WATCHDOG_TIMEOUT_NS ((uint64_t)PS5LM_SERVER_WATCHDOG_S * UINT64_C(1000000000))
 #else
-#define WATCHDOG_TIMEOUT_NS UINT64_C(300000000000)
+/* 300 s for the first models; larger ones size it from the measured load rate. */
+#define WATCHDOG_TIMEOUT_NS ((uint64_t)PS5LM_MODEL_WATCHDOG_S * UINT64_C(1000000000))
 #endif
 #else
 #define DIRECT_LIMIT UINT64_C(134217728)

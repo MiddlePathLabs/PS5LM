@@ -110,12 +110,30 @@ def nid(name):
     return base64.b64encode(value).decode().rstrip('=').replace('/', '-')
 
 
+CLIMB = {
+    'moe3b': {'repo': 'bartowski/granite-3.1-3b-a800m-instruct-GGUF',
+              'revision': 'be9a36f042806cb586bc65556c527079782b78e0',
+              'file': 'granite-3.1-3b-a800m-instruct-Q4_K_M.gguf', 'bytes': 2016888384,
+              'sha256': '48e0edcd578fd4462f26127f04c651d0e650741110185297741089aea01a82b3'},
+    'olmoe': {'repo': 'allenai/OLMoE-1B-7B-0125-Instruct-GGUF',
+              'revision': '2ac1d27317927518c9ef7bd99f91f3f1e4ee288d',
+              'file': 'OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf', 'bytes': 4213512192,
+              'sha256': '4ddc0e53159ed512b8dd67914a66e27bc618f694672ba43a9a0454eabd9c684f'},
+    'qwen3moe': {'repo': 'bartowski/Qwen_Qwen3-30B-A3B-Instruct-2507-GGUF',
+                 'revision': '6c6e8692f43e4ca663f7ece8229a1361090d3a4c',
+                 'file': 'Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf', 'bytes': 9870270464,
+                 'sha256': 'f2dc78edd3ec0171904f1945d8c05a948131b1103172b1710b763db2eb65f52a'},
+}
+
+
 def main():
     work, sdk, archive, llvm, root = map(pathlib.Path, sys.argv[1:])
     app = work / 'PPSA99041'
-    server = work.name in ('native-server', 'native-server-qwen')
+    server = work.name.startswith('native-server')
     moe = work.name in ('native-moe', 'native-server')
-    model = moe or server or work.name == 'native-model'
+    # The MoE climb (docs/PORTING.md "Larger MoE models"): native-VARIANT / native-server-VARIANT.
+    climb = next((v for v in CLIMB if work.name in ('native-' + v, 'native-server-' + v)), None)
+    model = moe or server or climb is not None or work.name == 'native-model'
     ggml_ops = model or work.name == 'native-ggml-ops'
     source = Elf(work / 'llvm-pie.elf')
     native = Elf(work / 'eboot.elf')
@@ -256,8 +274,11 @@ def main():
     manifest['workload'] = (('server-moe' if moe else 'server-dense') if server else
                             'model-moe-greedy' if moe else 'model-dense-greedy' if model else
                             'ggml-attn-prefill-scoped-fp32' if ggml_ops else 'integer-dispatch')
+    if climb:
+        manifest['workload'] = f'server-{climb}' if server else f'model-{climb}-greedy'
     if ggml_ops:
-        manifest['build_command'] += ((' server' if moe else ' server-qwen') if server else
+        manifest['build_command'] += (' ' + work.name.removeprefix('native-') if climb else
+                                      (' server' if moe else ' server-qwen') if server else
                                       ' moe' if moe else ' model' if model else ' ggml-ops')
         manifest['llama'] = json.loads((root / 'build/native-llama/manifest.json').read_text())
         manifest['build_scripts']['build-native-llama.sh'] = digest(root / 'scripts/build-native-llama.sh')
@@ -272,6 +293,8 @@ def main():
                              'file': 'Qwen3.5-0.8B-Q4_K_M.gguf', 'bytes': 532517120,
                              'sha256': 'bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517',
                              'console_path': '/data/PS5LM/models/Qwen3.5-0.8B-Q4_K_M.gguf'}
+        if climb:
+            manifest['model'] = dict(CLIMB[climb], console_path='/data/PS5LM/models/' + CLIMB[climb]['file'])
         if not server:  # the server mode is checked against the model mode's tokens from the Mac
             manifest['cpu_reference_header_sha256'] = digest(work / 'gen/model-reference.h')
         manifest['build_scripts']['build-host-model-reference.sh'] = digest(root / 'scripts/build-host-model-reference.sh')

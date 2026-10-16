@@ -8,6 +8,7 @@
 #   scripts/host-server-rehearsal.sh [build]          build only
 #   scripts/host-server-rehearsal.sh run [WINDOW]     build, then serve (default 60 s)
 #   PS5LM_MODEL_VARIANT=dense ...                     Qwen3.5 0.8B instead of Granite
+#   (also moe3b, olmoe, qwen3moe: the MoE climb)
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 llama="$root/third_party/llama.cpp"
@@ -18,6 +19,9 @@ variant="${PS5LM_MODEL_VARIANT:-moe}"
 case "$variant" in
     moe) model="$root/models/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf"; vflags=(-DPS5LM_MODEL_MOE) ;;
     dense) model="$root/models/Qwen3.5-0.8B-Q4_K_M.gguf"; vflags=() ;;
+    moe3b) model="$root/models/granite-3.1-3b-a800m-instruct-Q4_K_M.gguf"; vflags=(-DPS5LM_MODEL_GRANITE3B) ;;
+    olmoe) model="$root/models/OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf"; vflags=(-DPS5LM_MODEL_OLMOE) ;;
+    qwen3moe) model="$root/models/Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf"; vflags=(-DPS5LM_MODEL_QWEN3MOE) ;;
     *) echo "Unknown PS5LM_MODEL_VARIANT: $variant" >&2; exit 2 ;;
 esac
 [ "$(git -C "$llama" rev-parse HEAD)" = 552f18f912a32ea86edf82e2b76431cb7131538d ]

@@ -1317,6 +1317,99 @@ A per-token cost that does not depend on the model (about 13 queue
 submissions per token, each waited on; async compute, fusion and graph
 optimisation are off in this title) would explain it. Not measured yet.
 
+### Larger MoE models: the climb, pins and budgets (2026-10-15, late)
+
+**Rule** (AGENTS.md): the memory a title holds grows in steps, each at most
+double the largest total that passed and closed cleanly, each written here
+before its first run, keeping at least 1 GiB of the ~11.4 GiB device memory
+RADV reports free (so no total above 10.4 GiB, 10,649 MiB). Any failure, hang
+or unclosed title ends the climb at the last passing size. The last passing
+total before this climb: 1536 MiB (Granite 3.1 1B-A400M, Qwen3.5 0.8B).
+
+**Ladder**, chosen for architectures the pinned llama.cpp supports and quant
+types close to the checked ones (Q4_K, Q5_K, Q6_K, Q8_0):
+
+| Step | Total cap | Model (architecture) | File | Quant types | New on this GPU |
+|---|---|---|---|---|---|
+| 1 | 3072 MiB | Granite 3.1 3B-A800M Instruct (`granitemoe`, 40 experts / 8 active, 32 layers) | 2,016,888,384 B | Q4_K, Q6_K | only shapes |
+| 2 | 6144 MiB | OLMoE-1B-7B-0125-Instruct (`olmoe`, 64 experts / 8 active, 16 layers, Q/K norm, no GQA) | 4,213,512,192 B | Q4_K, Q6_K | the `olmoe` graph |
+| 3 | 10560 MiB | Qwen3-30B-A3B-Instruct-2507 (`qwen3moe`, 128 experts / 8 active, 48 layers, GQA 32/4) | 9,870,270,464 B | IQ2_XS, IQ3_XXS, IQ2_S, IQ3_S, Q4_K, Q5_K | IQ2/IQ3 matmul and `MUL_MAT_ID` shaders |
+
+Step 3 is capped by the device memory, not by doubling (2 x 6144 = 12,288).
+Untested ops are checked by the token comparison, as for the first models: a
+wrong expert or quant kernel shows as a token mismatch, a safe failure. Not
+chosen: gpt-oss 20B (10.7 GiB in every quant, leaves under 1 GiB), Qwen3.6
+35B-A3B (smallest useful quant ~10 GiB), Granite 4.0 H Tiny and LFM2-8B-A1B
+(Mamba/short-conv ops never checked here), DeepSeek-V2-Lite (MLA attention).
+
+**Pins** (sizes and SHA-256 equal to the Hub's LFS ids at these revisions and
+to the downloaded files; Mac copies in `models/`, console copies in
+`/data/PS5LM/models/`, uploaded with `scripts/ps5-put-file.py`: staged `.part`,
+raw `SELF` readback SHA-256, rename, final readback):
+
+| Model | Repo @ revision | File | Bytes | SHA-256 |
+|---|---|---|---|---|
+| Granite 3.1 3B-A800M | `bartowski/granite-3.1-3b-a800m-instruct-GGUF` @ `be9a36f042806cb586bc65556c527079782b78e0` | `granite-3.1-3b-a800m-instruct-Q4_K_M.gguf` | 2,016,888,384 | `48e0edcd578fd4462f26127f04c651d0e650741110185297741089aea01a82b3` |
+| OLMoE 1B-7B 0125 | `allenai/OLMoE-1B-7B-0125-Instruct-GGUF` @ `2ac1d27317927518c9ef7bd99f91f3f1e4ee288d` | `OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf` | 4,213,512,192 | `4ddc0e53159ed512b8dd67914a66e27bc618f694672ba43a9a0454eabd9c684f` |
+| Qwen3 30B-A3B 2507 | `bartowski/Qwen_Qwen3-30B-A3B-Instruct-2507-GGUF` @ `6c6e8692f43e4ca663f7ece8229a1361090d3a4c` | `Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf` | 9,870,270,464 | `f2dc78edd3ec0171904f1945d8c05a948131b1103172b1710b763db2eb65f52a` |
+
+Publishers: `ibm-granite` (quantized by bartowski), `allenai` (its own GGUF),
+`Qwen` (quantized by bartowski with an imatrix).
+
+**Build.** Each step has a model mode and a server mode
+(`bash scripts/build-native-compute.sh moe3b|olmoe|qwen3moe` and
+`server-moe3b|server-olmoe|server-qwen3moe`), selected by one define
+(`PS5LM_MODEL_GRANITE3B`, `PS5LM_MODEL_OLMOE`, `PS5LM_MODEL_QWEN3MOE`) in
+`ps5/native-compute/ggml-model.h`, which also holds that model's caps, its
+queue-submission cap, its model-mode watchdog and its server load deadline.
+The build refuses a package whose objects name any other model file. The CPU
+reference is `PS5LM_MODEL_VARIANT=<variant> scripts/build-host-model-reference.sh`;
+the API check takes `--variant <variant> --model-run <model-mode run>`. Run
+settings, the pass rule, the API rule and every other limit are the earlier
+models' (context 1024 in model mode, 2048 in server mode, batch = ubatch = 32,
+two threads, FP32 flash attention, F16 KV, no op offload, no mmap, one model
+load and one context per launch, all layers and the output on the GPU). The
+first two models build byte-identically to before (`moe` rebuilt: `0c91055b…890a`).
+
+**What scales with size.** The weights cap, the context cap, the total cap
+(the direct-memory ledger, which has one 64 KiB slot per unit of the total)
+and the Vulkan cap (weights + context) per model. Queue submissions: the
+loader uploads in 1 MiB chunks, about one submission each (Granite 1B: 918
+after loading 826 MiB), so the model mode's 8192 becomes about the weights in
+MiB plus 8192. Load time: the console read Granite 1B at about 90 MB/s
+(9.1 s for 821 MB; Qwen 0.8B came from cache), so deadlines assume 80 MB/s
+and double it. One Vulkan allocation stays at most 256 MiB (ggml 240 MiB):
+the largest single tensor of all three is Qwen3's 204 MiB Q5_K output.
+
+#### Step 1: Granite 3.1 3B-A800M, total 3072 MiB
+
+Host CPU reference (same pin and patches;
+`test-results/local/model-reference/20261015-210244/`): model buffer 1921.79 MiB,
+KV 64.00 MiB (1024 cells, 32 layers, F16), compute 6.38 MiB; text "A GPU
+(Graphics Processing Unit) and a CPU (Central Processing Unit) are both
+essential components in a computer system, but they serve distinct purposes
+and have different"; prompt 22 tokens; smallest top-two gap 0.105 at token 20.
+
+| Part | Expected | Cap | Enforced by |
+|---|---|---|---|
+| Before the load | ~70 MiB | in the total | ledger |
+| Weights (what the load adds) | ~1960 MiB | 2304 MiB | ledger delta across the load (model mode) / its wrap (server), else `model_weights_budget` |
+| Context, model mode (KV 64 + compute + scheduler) | ~110 MiB | 384 MiB | ledger delta across `llama_init_from_model`, else `model_context_budget` |
+| Context, server mode (KV 128 at 2048) | ~180 MiB | 384 MiB | same |
+| All Vulkan memory | ~2.1 GiB | 2688 MiB | dispatch guard, per allocation |
+| **Total direct memory** | **~2.2 GiB** | **3072 MiB** | ledger, per allocation |
+
+Queue submissions in the model mode: 12,288 (expected ~2,500). Watchdog 300 s
+(load expected ~25 s); server load deadline 120 s, window 600 s, watchdog 840 s.
+
+**Result: pass** (console runs 1 and 2 of this climb; details in CONSOLE.md).
+Model mode: rule `prefix` (first 20 tokens equal to the CPU, the difference at
+the 0.105 near tie), 33/33 offloaded, 2 splits, load 21.3 s, weights +1986 MiB,
+context +123 MiB, direct peak 2181 MiB, 2626 submissions. Server mode: API
+check 9/9 with tokens identical to the model mode, weights +2005 MiB, context
++184 MiB, peak 2294 MiB; 711/709 tok/s prompt, 149.5/146.4 tok/s generation.
+Largest passing total is now **3072 MiB**, so step 2 may be at most 6144 MiB.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works; one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

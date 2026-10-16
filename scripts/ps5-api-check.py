@@ -39,6 +39,26 @@ VARIANTS = {
         'prompt': '<|start_of_role|>user<|end_of_role|>In a short paragraph, explain how '
                   'a GPU differs from a CPU.<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>',
     },
+    # The MoE climb (docs/PORTING.md "Larger MoE models"): pass --model-run with the
+    # model-mode run of the same model.
+    'moe3b': {
+        'model_run': None,
+        'reference': 'build/native-moe3b/gen/model-reference.h',
+        'prompt': '<|start_of_role|>user<|end_of_role|>In a short paragraph, explain how '
+                  'a GPU differs from a CPU.<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>',
+    },
+    'olmoe': {
+        'model_run': None,
+        'reference': 'build/native-olmoe/gen/model-reference.h',
+        'prompt': '<|endoftext|><|user|>\nIn a short paragraph, explain how a GPU differs '
+                  'from a CPU.\n<|assistant|>\n',
+    },
+    'qwen3moe': {
+        'model_run': None,
+        'reference': 'build/native-qwen3moe/gen/model-reference.h',
+        'prompt': '<|im_start|>user\nIn a short paragraph, explain how a GPU differs '
+                  'from a CPU.<|im_end|>\n<|im_start|>assistant\n',
+    },
     'dense': {
         'model_run': 'test-results/ps5/PPSA99041/20261015-195528',
         'reference': 'build/native-model/gen/model-reference.h',
@@ -138,11 +158,16 @@ def main():
     ap.add_argument('--wait', type=int, default=180, help='seconds to wait for /health')
     ap.add_argument('--shutdown', action='store_true', help='POST /ps5lm/shutdown at the end')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--model-run', default=None, help='model-mode run directory (test-results/ps5/PPSA99041/<time>)')
     args = ap.parse_args()
     if not args.host:
         raise SystemExit('set PS5_HOST or pass --host')
     base = f'http://{args.host}:{args.port}'
-    v = VARIANTS[args.variant]
+    v = dict(VARIANTS[args.variant])
+    if args.model_run:
+        v['model_run'] = args.model_run
+    if not v['model_run']:
+        raise SystemExit('pass --model-run for this variant')
     gpu_tokens, prompt_ids = model_run_tokens(v['model_run'])
     cpu_tokens, gaps = reference(v['reference'])
     out = pathlib.Path(args.out) if args.out else (

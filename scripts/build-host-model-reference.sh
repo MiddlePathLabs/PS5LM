@@ -6,7 +6,7 @@
 #
 #   scripts/build-host-model-reference.sh [MODEL.gguf]
 #   PS5LM_MODEL_VARIANT=moe scripts/build-host-model-reference.sh   # the small MoE,
-#       writes build/native-moe/gen/model-reference.h
+#       writes build/native-moe/gen/model-reference.h (also moe3b, olmoe, qwen3moe)
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 llama="$root/third_party/llama.cpp"
@@ -15,6 +15,10 @@ variant="${PS5LM_MODEL_VARIANT:-dense}"
 case "$variant" in
     dense) default_model="$root/models/Qwen3.5-0.8B-Q4_K_M.gguf"; out="native-model"; vflags=() ;;
     moe) default_model="$root/models/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf"; out="native-moe"; vflags=(-DPS5LM_MODEL_MOE) ;;
+    # The MoE climb (docs/PORTING.md "Larger MoE models"); writes build/native-VARIANT/gen/.
+    moe3b) default_model="$root/models/granite-3.1-3b-a800m-instruct-Q4_K_M.gguf"; out="native-moe3b"; vflags=(-DPS5LM_MODEL_GRANITE3B) ;;
+    olmoe) default_model="$root/models/OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf"; out="native-olmoe"; vflags=(-DPS5LM_MODEL_OLMOE) ;;
+    qwen3moe) default_model="$root/models/Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf"; out="native-qwen3moe"; vflags=(-DPS5LM_MODEL_QWEN3MOE) ;;
     *) echo "Unknown PS5LM_MODEL_VARIANT: $variant" >&2; exit 2 ;;
 esac
 model="${1:-$default_model}"

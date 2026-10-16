@@ -6,7 +6,14 @@
  */
 #ifndef PS5LM_GGML_SERVER_H
 #define PS5LM_GGML_SERVER_H
-#if defined(PS5LM_MODEL_MOE)
+#include "ggml-model.h"
+#if defined(PS5LM_MODEL_QWEN3MOE)
+#define PS5LM_SERVER_WORKLOAD "server-qwen3moe"
+#elif defined(PS5LM_MODEL_OLMOE)
+#define PS5LM_SERVER_WORKLOAD "server-olmoe"
+#elif defined(PS5LM_MODEL_GRANITE3B)
+#define PS5LM_SERVER_WORKLOAD "server-moe3b"
+#elif defined(PS5LM_MODEL_MOE)
 #define PS5LM_SERVER_WORKLOAD "server-moe"
 #else
 #define PS5LM_SERVER_WORKLOAD "server-dense"
@@ -23,7 +30,7 @@
 /* Lifetime, seconds. The model must be loaded within LOAD; the server then
  * serves for WINDOW or until POST /ps5lm/shutdown, whichever comes first, and
  * must have stopped and freed within STOP. The watchdog covers all of it. */
-#define PS5LM_SERVER_LOAD_S 120u
+#define PS5LM_SERVER_LOAD_S PS5LM_MODEL_SERVER_LOAD_S /* 120 s for the first models */
 #ifndef PS5LM_SERVER_WINDOW_S /* the host rehearsal shortens it */
 #define PS5LM_SERVER_WINDOW_S 600u
 #endif
