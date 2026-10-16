@@ -1,0 +1,83 @@
+PS5 native title (__PROSPERO__) only: clip (mtmd) reads the mmproj's tensor data with
+read(2) on a descriptor of its own instead of the std::ifstream, which is fread here and
+reads an uncached file at ~92 MB/s (the Qwen3-VL mmproj loads took 9.0 s for 4B and 12.5 s
+for 8B). Same reasoning and loop as 0003-ps5-model-file-reads.patch; the ifstream still
+reads the few small F32 vectors before the loop. Applies after patch 0004.
+
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -26,6 +26,11 @@
+ #include <array>
+ #include <functional>
+ #include <float.h>
++#if defined(__PROSPERO__)
++#include <cerrno>
++#include <fcntl.h>
++#include <unistd.h>
++#endif
+ 
+ struct clip_logger_state g_logger_state = {clip_log_callback_default, NULL};
+ 
+@@ -3665,17 +3670,53 @@
+             // read the weight from file
+             if (!ctx_clip.no_alloc) {
+                 size_t data_loaded = 0;
++#if defined(__PROSPERO__)
++                // PS5LM: tensor data is read with read(2) on a descriptor of its own;
++                // the ifstream is fread here, ~92 MB/s for an uncached file, while
++                // read(2) with large requests reads at 1.6-3.7 GB/s (patch 0003).
++                const int ps5_fd = open(fname.c_str(), O_RDONLY | O_CLOEXEC);
++                if (ps5_fd == -1) {
++                    throw std::runtime_error(string_format("%s: failed to open %s: %s\n", __func__, fname.c_str(), strerror(errno)));
++                }
++                struct ps5_fd_closer { int fd; ~ps5_fd_closer() { close(fd); } } ps5_fd_guard { ps5_fd };
++                auto ps5_read_at = [&](void * dst, size_t offset, size_t num_bytes, const char * name) {
++                    if (lseek(ps5_fd, (off_t) offset, SEEK_SET) != (off_t) offset) {
++                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s: %s\n", __func__, name, strerror(errno)));
++                    }
++                    size_t done = 0;
++                    while (done < num_bytes) {
++                        const ssize_t ret = ::read(ps5_fd, static_cast<char *>(dst) + done, num_bytes - done);
++                        if (ret == -1 && errno == EINTR) {
++                            continue;
++                        }
++                        if (ret <= 0) {
++                            throw std::runtime_error(string_format("%s: failed to read tensor %s: %s\n", __func__, name,
++                                ret == 0 ? "unexpected end of file" : strerror(errno)));
++                        }
++                        done += (size_t) ret;
++                    }
++                };
++#endif
+                 for (auto & t : tensors_to_load) {
+                     ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                     GGML_ASSERT(cur && "tensor not found in ctx_data");
+                     auto it_off = tensor_offset.find(t->name);
+                     GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
+                     const size_t offset = it_off->second;
++                    size_t num_bytes = ggml_nbytes(cur);
++#if defined(__PROSPERO__)
++                    if (ggml_backend_buft_is_host(buft)) {
++                        ps5_read_at(cur->data, offset, num_bytes, t->name);
++                    } else {
++                        read_buf.resize(num_bytes);
++                        ps5_read_at(read_buf.data(), offset, num_bytes, t->name);
++                        ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
++                    }
++#else
+                     fin.seekg(offset, std::ios::beg);
+                     if (!fin) {
+                         throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+                     }
+-                    size_t num_bytes = ggml_nbytes(cur);
+                     if (ggml_backend_buft_is_host(buft)) {
+                         // for the CPU and Metal backend, we can read directly into the tensor
+                         fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
+@@ -3685,6 +3726,7 @@
+                         fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
+                         ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                     }
++#endif
+                     data_loaded += num_bytes;
+                     if (progress_callback && total_data_size > 0) {
+                         const float progress = (float)data_loaded / (float)total_data_size;

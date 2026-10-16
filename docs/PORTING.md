@@ -2205,6 +2205,24 @@ and `/v1/systemone` decision models, which this work doesn't need.
 **Not yet rerun with the patched driver:** the other build modes (MoE, vision). Their earlier
 passes used the unpatched `radv-release` archive, and their next builds link the patched one.
 
+### Image-encoder loads with read(2) (2026-10-16)
+
+`patches/0005-ps5-clip-file-reads.patch` (`__PROSPERO__` only, applies after 0004): clip's
+tensor-data loop reads the mmproj with `read(2)` on a descriptor of its own (lseek + read
+loop, as patch 0003) instead of the `std::ifstream`, which is `fread` here. The few small
+F32 vectors clip reads before the loop still go through the ifstream. No new imports (the
+title already had `open`, `lseek`, `read`, `close`: 291, as before). Host builds and the CPU
+reference are unchanged.
+
+**Check (console run 1 of this session, vl4b model mode, eboot `6edb7318…e416`, budget
+6144 MiB unchanged; first vision run on the patched RADV of the section above):** pass,
+closed. Mmproj load **8955 → 471 ms**; text load 2.49 s. Embedding statistics equal to
+the previous pass to every printed digit (relative L2 0.00818957, cosine 0.999966517, worst
+token 189), 47/47 tokens identical to the CPU, answer right, weights/mmproj/context bytes
+and the 4223 MB direct peak equal to the earlier run, 3339 submissions; 114.5 tok/s.
+Evidence `test-results/ps5/PPSA99041/20261016-092200/`. The 8B (12.5 s before) takes the same
+patch at its next build.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

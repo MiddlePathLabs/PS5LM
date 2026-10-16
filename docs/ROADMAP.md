@@ -178,8 +178,9 @@ tokens were identical to the CPU's with the right answer. See PORTING.md
 base64 data URL returns the model mode's exact tokens; image prompt 397 ms,
 113 tok/s generation (`scripts/ps5-api-vision.py`). Qwen3-VL 8B passed both
 modes in a new 8192 MiB step (encode 291 ms, 79 tok/s, peak 6875 MiB).
-Proposals: load the mmproj with `read(2)` (9–12.5 s of `fread` per launch
-now); a larger or multi-image cap only with a written budget.
+The mmproj now loads with `read(2)` (patch 0005): 9.0 → 0.47 s for the 4B,
+same tokens, embedding and memory. Proposal: a larger or multi-image cap only
+with a written budget.
 
 **Next proposals** (none started): (a) generation is now set by GPU time per
 dispatch (~5 µs, 621 dispatches per Qwen token): find the remaining unfused

@@ -21,7 +21,7 @@ Vision (model mode, title clock; [PORTING.md](PORTING.md) "Vision"): Qwen3-VL
 4B Instruct Q4_K_M (2.33 GiB, `qwen3vl`) + its F16 mmproj (0.78 GiB) in a
 6144 MiB budget: one 448 x 448 image (196 tokens) encoded in 231 ms,
 embedding within 0.8 % (relative L2) of the CPU's, text identical to the CPU,
-114.8 tok/s generation. Through the API (server mode): one image request's
+114.8 tok/s generation; the mmproj loads in 0.47 s (`read(2)`, patch 0005). Through the API (server mode): one image request's
 prompt (encode + 224 tokens) in 397 ms, 113 tok/s generation; text 913 / 1171
 tok/s prompt (128 / 512 tokens), 116 / 112 tok/s generation. Qwen3-VL 8B
 Instruct Q4_K_M (4.68 GiB) + F16 mmproj (1.08 GiB) in an 8192 MiB budget:

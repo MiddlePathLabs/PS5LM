@@ -590,6 +590,10 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   - **Speed and memory:** tg 252.2/250.5 tok/s, pp 3127/5255, within 1% of before. Peak
     1409.6 MiB of 2048.
   - **Evidence:** `…/PPSA99041/20261016-090943/`. All four services answered afterwards.
+- **2026-10-16, vl4b model mode with the mmproj read through `read(2)`** (eboot
+  `6edb7318…e416`, patch 0005, patched RADV): pass, exit 0, closed. Mmproj load 8955 → 471
+  ms; embedding, tokens (47/47, HELLO), memory (peak 4223 MB) and submissions equal to the
+  earlier pass; 114.5 tok/s. Evidence: `…/PPSA99041/20261016-092200/`.
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
