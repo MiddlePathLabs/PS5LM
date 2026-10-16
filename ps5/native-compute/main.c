@@ -441,10 +441,17 @@ static const struct { const char *name; char *value; } probe_environment[] = {
     {"GGML_VK_DISABLE_ASYNC", "1"},
     {"GGML_VK_DISABLE_COOPMAT", "1"},
     {"GGML_VK_DISABLE_COOPMAT2", "1"},
+#if !defined(PS5LM_GGML_MODEL)
+    /* The operator probes keep fusion and graph optimisation off. */
     {"GGML_VK_DISABLE_FUSION", "1"},
     {"GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1"},
-#if !defined(PS5LM_GGML_MODEL)
     {"GGML_VK_PS5_ATTN_DIAGNOSTICS", "1"}, /* per dispatch: too many lines for a model */
+#else
+    /* Models: fusion and graph optimisation on, a submission every 1000 nodes
+     * (the flop-based split stays), measured on the console in one serving
+     * window per model with tokens identical to the model mode's
+     * (docs/PORTING.md "Performance"). Runtime knobs can still override. */
+    {"GGML_VK_MAX_NODES_PER_SUBMIT", "1000"},
 #endif
 #endif
 #if defined(PS5LM_GGML_MODEL)

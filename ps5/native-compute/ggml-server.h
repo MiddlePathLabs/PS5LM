@@ -23,9 +23,16 @@
 #define PS5LM_SERVER_HOST "0.0.0.0" /* the console's one LAN interface; only while the window is open */
 #endif
 /* One slot, a 2048-token context (the 512-token benchmark prompt plus 128
- * generated tokens fit with room to spare), and the model mode's batches. */
+ * generated tokens fit with room to spare). The context is created for
+ * physical batches of up to 512 tokens (the compute buffers are sized for
+ * that); the prompt chunk the server actually decodes at a time is a runtime
+ * knob (POST /ps5lm/knobs "prompt_batch", 1..512), PS5LM_SERVER_PROMPT_BATCH
+ * by default. The model mode's batches were 32 (docs/PORTING.md "Performance"). */
 #define PS5LM_SERVER_CTX 2048
-#define PS5LM_SERVER_BATCH 32
+#define PS5LM_SERVER_BATCH 512
+#ifndef PS5LM_SERVER_PROMPT_BATCH
+#define PS5LM_SERVER_PROMPT_BATCH 512 /* 32 in the first tuning runs */
+#endif
 #define PS5LM_SERVER_HTTP_THREADS "4"
 /* Lifetime, seconds. The model must be loaded within LOAD; the server then
  * serves for WINDOW or until POST /ps5lm/shutdown, whichever comes first, and

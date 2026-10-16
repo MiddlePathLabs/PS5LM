@@ -1513,6 +1513,185 @@ prompt processing at ubatch 32 is 570–710 tok/s for the 2–4 GB models and
 reads ~92 MB/s from `/data` (107 s for 9.9 GB), so larger or parallel reads
 would shorten big loads.
 
+### Performance: measured tuning (2026-10-15, night)
+
+**Baseline** (the builds on record, unchanged since; 128-token prompt, medians of
+3 after a warm-up, `scripts/ps5-api-bench.py`): Qwen3.5 0.8B pp 1744 / tg 214.0
+tok/s (`test-results/ps5/api-bench/20261015-204241/`), OLMoE-1B-7B pp 614.5 /
+tg 232.4 (`…/20261015-212407/`), Granite 3.1 1B-A400M pp 1370 / tg 212.5
+(`…/20261015-204434/`), Granite 3.1 3B-A800M pp 711 / tg 149.5
+(`…/20261015-211113/`).
+
+**What the earlier logs already say.** The PS5 winsys prints its submission
+times every 10 s of a submitting queue (`radv/ps5 submissions: window …` in
+the title's output). During the OLMoE benchmark: 5103 submissions in a window,
+1467 ms inside `sceAgcDriverSubmitDcb` on the submitting thread (0.29 ms each)
+and 1998 ms in `sceAgcSuspendPoint` on the winsys's kick thread (0.39 ms
+each); Qwen: 2842 submissions, 302 ms and 581 ms. At about 13 submissions per
+decoded token (934-node OLMoE graph: one every 100 nodes, plus the flop-based
+split and the almost-ready fence), submissions alone could cost 1.4–3.7 ms of
+a 4.3–4.7 ms token. That is the first thing to measure.
+
+**Instrumentation** (no change to what runs): the dispatch guard
+(`ggml-dispatch.c`) counts dispatches and times every `vkQueueSubmit`,
+fence wait and semaphore wait (one monotonic clock read on each side); patch
+`ggml-vulkan/0007` times each `graph_compute` (including its final
+synchronise, since async is off). Server mode serves them at
+`GET /ps5lm/stats`.
+
+**Runtime knobs, so one serving window measures many settings.** Patch
+`ggml-vulkan/0007` latches, at the start of every graph on the computing
+thread, `disable_fusion` (with the ADD+RMS_NORM partials), the nodes per
+submit and the flop-based submit split (0 = off), reads
+`disable_graph_optimize` when the scheduler optimises a graph, and the
+mat-vec workgroup size (`dmmv_wg`: 0 subgroup, 1 large; ProsperoAI's
+`GGML_VK_PS5_DMMV_WG`) at each pipeline choice. -1 keeps what device creation
+chose from the closed environment (fusion and graph optimisation off, 100
+nodes, the default split, subgroup workgroups). Patch `server/0003` adds
+`POST /ps5lm/knobs` (every name and range checked by the title; a bad one is
+a 400, which fails the run) and a prompt-chunk knob (`prompt_batch`, 1–512):
+the server's context is now created for 512-token physical batches, and the
+chunk it decodes at a time is the knob, 32 by default (the old setting, so the
+default computes exactly the old graphs). Not made runtime knobs: ProsperoAI's
+`RM_STDQ`/`RM_KQ`/subgroup size (pipeline specialisation, fixed when the
+pipeline is defined at device creation), CPU threads (the only CPU node is the
+input-embedding `GET_ROWS` from `Vulkan_Host`; nothing else runs on the CPU).
+`scripts/ps5-api-tune.py` runs a fixed adaptive plan in one window: baseline;
+four submit cadences; the large mat-vec workgroup; prompt chunks 64/128/256/512;
+fusion; graph optimisation; both; the best correct combination; the baseline
+again. Every configuration first passes the correctness check (32
+temperature-0 tokens of the model mode's prompt equal to the model mode's GPU
+tokens, or the model mode's rule against the CPU reference) or is never
+chosen. The model mode's prompt is shorter than 32 tokens, so prompt chunks
+do not change it; for them the 512-token benchmark's 128 generated tokens are
+also compared across chunks.
+
+**Fence timeout and watchdog unchanged:** every fence and semaphore wait is
+still at most 2 s. A 512-token OLMoE graph is estimated at 0.2–0.9 s (the
+512-token prompt took 0.9 s as 16 graphs of 32); the knobs cannot make one
+submission larger than a graph. Device-lost watchdog, idle-wait refusal and
+the serving window are unchanged.
+
+**Budget for the 512-token context** (written before the first run).
+Measured on the Mac with the same pin (Metal stand-in, n_ctx 2048,
+n_outputs_max 1 as the server sets it): Qwen3.5 0.8B compute buffers 13.8 →
+42.2 MiB (GPU) and 0.4 → 6.0 MiB (CPU); OLMoE 33.5 → 74.7 MiB and 0.6 →
+10.0 MiB. ggml-vk's preallocated conversion buffers grow with the batch too
+(allocated at the first graph, counted in the total and Vulkan caps, not the
+context cap); estimated under 64 MiB.
+
+| Part | Qwen3.5 0.8B (server-qwen) | OLMoE (server-olmoe) | Enforced by |
+|---|---|---|---|
+| Weights | ~764 MiB, cap 1152 (unchanged) | ~4042 MiB, cap 4608 (unchanged) | wrap of the load |
+| Context | ~320 MiB, cap **512** (was 384) | ~340 MiB, cap **768** (was 512) | wrap of the context |
+| All Vulkan memory | ~0.85 GiB, cap 1664 MiB | ~4.4 GiB, cap 5376 MiB | dispatch guard |
+| **Total direct memory** | **~1.3 GiB, cap 1536 MiB (unchanged)** | **~4.5 GiB, cap 6144 MiB (unchanged)** | ledger |
+
+No total grows, so the stepped rule's largest passing total (6144 MiB) is not
+touched. The model modes keep batch 32 and get the same larger context caps
+(an upper bound only).
+
+**Storage probe** (for SSD weight streaming), server mode only, after the
+server has stopped and freed: the pinned model file, read only, regions of
+96 MiB from its start: sequential reads of 1, 4, 16 and 64 MiB, four threads
+with their own descriptors (4 MiB reads), then the first region again (cached,
+for comparison). One 64 MiB buffer; at most 10 s a test and 30 s in all
+(inside the watchdog's 60 s margin). One `PS5LM_STORAGE_PROBE` line. For the
+OLMoE file the first regions were read first during the 4 GB load, so they
+are the least likely to be cached; the 0.5 GB Qwen file is probably cached
+(it loaded at ~650 MB/s before).
+
+
+**Tuning runs (console runs 1 and 2 of this work).** Both passed and closed;
+every configuration's 32 check tokens were identical to the model mode's GPU
+tokens, and the 128 tokens generated after each 128- and 512-token benchmark
+prompt were identical across all 15 configurations of each model. Medians
+(`test-results/ps5/api-tune/20261015-233814/` Qwen, `…/20261015-234228/` OLMoE):
+
+| Configuration | Qwen pp128 / pp512 / tg128 | OLMoE pp128 / pp512 / tg128 | Qwen / OLMoE dispatches per graph |
+|---|---|---|---|
+| baseline (old settings) | 1731 / 1867 / 212.0 | 615 / 571 / 231.5 | 796 / 582 |
+| one submission per graph (1000 nodes, no flop split) | 1731 / 1861 / 191.4 | 619 / 568 / 216.6 | |
+| 300 nodes, no flop split | 1782 / 1868 / 204.1 | 623 / 572 / 225.7 | |
+| 150 nodes, no flop split | 1792 / 1885 / 209.7 | 624 / 573 / 233.4 | |
+| 1000 nodes, flop split kept | 1735 / 1861 / 214.6 | 614 / 572 / 233.5 | |
+| + large mat-vec workgroup (ProsperoAI `DMMV_WG=1`) | 1714 / 1855 / 154.6 | 619 / 573 / 185.7 | |
+| + prompt chunk 64 / 128 / 256 / 512 | pp512 2783 / 3480 / 4567 / 5163 | pp512 907 / 1441 / 2185 / 2575 | |
+| + fusion | 1778 / 1922 / 243.8 | 624 / 577 / 300.0 | 622 / 327 |
+| + graph optimisation | 1681 / 1882 / 230.6 | 628 / 584 / 240.7 | |
+| + fusion and graph optimisation | 1730 / 1927 / 253.0 | 635 / 590 / 324.3 | 622 / 327 |
+| **final: fusion, graph opt., 1000 nodes, chunk 512** | **3153 / 5271 / 251.4** | **1429 / 2656 / 326.7** | 621 / 326 |
+| baseline again | 1721 / 1874 / 209.8 | 615 / 570 / 230.3 | |
+
+**What the counters say.** At the baseline a Qwen token's graph took 4.41 ms
+of which 2.15 ms was inside `vkQueueSubmit` (13.8 submissions, 156 µs each)
+and 1.18 ms in the final fence wait; OLMoE 5.52 ms, 3.69 ms in submit. With
+one submission per graph the submit time vanished (74 µs) but the fence wait
+grew to 3.8 ms and the token got slower: the submit call blocks while the GPU
+is still busy, so its time is mostly GPU time, not driver overhead, and
+splitting the graph overlaps recording with execution. What did help is
+fewer dispatches: fusion (rms_norm+mul, multi-add, MoE top-k, …) cut 796 → 622
+(Qwen) and 582 → 327 (OLMoE) dispatches per token and the token time fell
+with them, graph optimisation (fewer barriers between independent nodes)
+added a little more. Generation is therefore bound by a fixed cost per
+dispatch on the GPU side (dispatch plus barrier, roughly 4–6 µs each at
+these sizes), which is why it tracked the layer count. Larger mat-vec
+workgroups are slower on this GPU. Prompt processing scales with the chunk
+up to 512 (MoE most: each chunk reads all experts once).
+
+**Kept** (one build-time change of the defaults, measured above): for model
+and server builds the closed environment no longer disables fusion and graph
+optimisation and sets `GGML_VK_MAX_NODES_PER_SUBMIT=1000`; the server's
+prompt chunk is 512. The operator probes keep fusion and graph optimisation
+off. **Reverted/not kept:** one submission per graph, 150/300-node cadences
+without the flop split, the large mat-vec workgroup. **Not tried:** async
+compute (single-sequence decoding needs the logits before the next graph, so
+there is nothing to overlap; it would change the synchronisation paths the
+2 s waits guard), ProsperoAI's rows-per-workgroup and subgroup knobs (fixed
+at pipeline definition: build-time runs, left for later), CPU threads
+(nothing but the embedding lookup runs on the CPU).
+
+**Budget change for Qwen3.5 0.8B and Granite 3.1 1B** (written before the
+run that uses it): the 512-token context measured +506 MiB on Qwen (cap 512)
+and a direct peak of 1505 of 1536 MiB, because qwen35's scheduler block is
+sized from `n_tokens * 40` nodes (414 MiB at 512, 198 MiB at 32). Context cap
+**768 MiB**, total **2048 MiB** (Vulkan cap 1920); expected peak ~1.5 GiB.
+2048 MiB is below the largest passing total (6144), so it is not a new step.
+
+**Model load.** The loader read the OLMoE file at ~92 MB/s, but the storage
+probe read the same file's first regions (read first during the load) at
+1.4 GB/s with 1 MiB `read()` calls and 2.2–2.8 GB/s with 4–64 MiB, 3.2 GB/s
+with four threads. llama.cpp's no-mmap loader reads through `fread` on a
+`FILE`. Patch `patches/0003-ps5-model-file-reads.patch` (`__PROSPERO__` only)
+reads with `read(2)` on a descriptor of its own (the `FILE` keeps the
+position). Checked on the Mac against `fread` for 200 random ranges
+(byte-identical, positions equal), then on the console: **OLMoE loads in
+3.6 s instead of 45.6 s** (about 1.17 GB/s, model mode and server mode), with
+the same tokens. The probe's `fread` test confirms the cause: 1 MiB `fread`s of
+an uncached region of the OLMoE file ran at 92.6 MB/s (the old load rate),
+the same calls on the cached Qwen file at 4.3 GB/s; this libc's `fread`
+apparently reaches the file in small requests, which only cost when they go
+to the SSD. Qwen's load (file cached) went from 0.82 to 1.26 s, within what a
+cached 0.5 GB read varies; not investigated further.
+
+**Results** (kept defaults; console runs 3–6; API medians, 128/512-token
+prompts, 128 generated tokens; model-mode tokens identical to the earlier
+model-mode runs, rule `prefix` as before):
+
+| Model | Prompt tok/s before → after | Generation tok/s before → after | Load | Per-token graph (dispatches, submits) |
+|---|---|---|---|---|
+| Qwen3.5 0.8B (24 layers) | 1744 / 1884 → **3147 / 5264** | 214.0 / 210.9 → **254.5 / 252.7** | 0.8 → 1.3 s (cached) | 796 → 621, 13.8 → 11.0 |
+| OLMoE-1B-7B (16 layers) | 615 / 571 → **1429 / 2628** | 232.4 / 223.1 → **326.9 / 309.2** | 45.6 → **3.6 s** | 582 → 326, 11.9 → 11.2 |
+
+**What limits speed now.** Generation: a Qwen token's graph is 3.47 ms (621
+dispatches, ~5.6 µs each), an OLMoE token's 3.45 ms (326 dispatches, but MoE
+mat-vecs are larger); the GPU time per dispatch, not submission or CPU
+recording, sets it. More fusion (fewer dispatches) or fewer barriers is what
+would help; ggml-vk's remaining unfused ops are the place to look. Prompt
+processing: 512-token chunks are the largest the context allows; larger
+chunks need a larger compute buffer and (Qwen) a larger scheduler block.
+
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works; one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

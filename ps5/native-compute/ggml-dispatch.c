@@ -8,6 +8,8 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <time.h>
 int sceKernelDebugOutText(int channel, const char *text);
 
 _Noreturn void ps5lm_ops_fatal(const char *stage);
@@ -19,6 +21,97 @@ void ps5lm_ops_submission(bool accepted);
 PFN_vkVoidFunction vk_icdGetInstanceProcAddr(VkInstance, const char *);
 static VkInstance instance;
 static atomic_uint submissions;
+
+/* Performance counters (docs/PORTING.md "Performance"): where a token's time
+ * goes on the CPU side. Relaxed atomics and one monotonic clock read on each
+ * side of a submit or a wait; nothing is logged per event. */
+static atomic_ullong perf_dispatches, perf_submit_ns, perf_fence_waits, perf_fence_ns;
+static atomic_ullong perf_semaphore_waits, perf_semaphore_ns, perf_graphs, perf_graph_ns;
+static uint64_t graph_started; /* ggml computes graphs on one thread at a time */
+static uint64_t mono_ns(void)
+{
+    struct timespec t;
+    if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) return 0;
+    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+#define PERF_ADD(counter, value) atomic_fetch_add_explicit(&(counter), (value), memory_order_relaxed)
+
+/* Runtime tuning knobs, read by patches/ggml-vulkan/0007 at the start of each
+ * graph (fusion, graph optimisation, submit cadence) or at each mat-vec
+ * pipeline choice (workgroup size). -1 keeps what the closed environment set
+ * at device creation. Set only through ps5lm_vk_set_knob (the server's
+ * POST /ps5lm/knobs), each value range-checked. The build's defaults are the
+ * PS5LM_VK_DEFAULT_* values below. */
+#ifndef PS5LM_VK_DEFAULT_DISABLE_FUSION
+#define PS5LM_VK_DEFAULT_DISABLE_FUSION -1
+#endif
+#ifndef PS5LM_VK_DEFAULT_DISABLE_GRAPH_OPTIMIZE
+#define PS5LM_VK_DEFAULT_DISABLE_GRAPH_OPTIMIZE -1
+#endif
+#ifndef PS5LM_VK_DEFAULT_NODES_PER_SUBMIT
+#define PS5LM_VK_DEFAULT_NODES_PER_SUBMIT -1
+#endif
+#ifndef PS5LM_VK_DEFAULT_SUBMIT_MFLOP
+#define PS5LM_VK_DEFAULT_SUBMIT_MFLOP -1
+#endif
+#ifndef PS5LM_VK_DEFAULT_DMMV_WG
+#define PS5LM_VK_DEFAULT_DMMV_WG -1
+#endif
+static const struct { const char *name; long long min, max; } knob_info[] = {
+    {"disable_fusion", 0, 1},
+    {"disable_graph_optimize", 0, 1},
+    {"nodes_per_submit", 1, 100000},
+    {"submit_mflop", 0, 10000000},
+    {"dmmv_wg", 0, 1},
+};
+#define KNOB_COUNT (sizeof(knob_info) / sizeof(knob_info[0]))
+static atomic_llong knobs[KNOB_COUNT] = {
+    PS5LM_VK_DEFAULT_DISABLE_FUSION, PS5LM_VK_DEFAULT_DISABLE_GRAPH_OPTIMIZE,
+    PS5LM_VK_DEFAULT_NODES_PER_SUBMIT, PS5LM_VK_DEFAULT_SUBMIT_MFLOP, PS5LM_VK_DEFAULT_DMMV_WG,
+};
+long long ps5lm_vk_knob(int which)
+{
+    return which >= 0 && (unsigned)which < KNOB_COUNT ?
+        atomic_load_explicit(&knobs[which], memory_order_relaxed) : -1;
+}
+/* 0 set, -1 unknown name, -2 out of range. -1 always restores the default. */
+int ps5lm_vk_set_knob(const char *name, long long value)
+{
+    for (unsigned i = 0; name && i < KNOB_COUNT; ++i) {
+        if (strcmp(name, knob_info[i].name) != 0) continue;
+        if (value != -1 && (value < knob_info[i].min || value > knob_info[i].max)) return -2;
+        atomic_store(&knobs[i], value);
+        return 0;
+    }
+    return -1;
+}
+void ps5lm_vk_graph_begin(void)
+{
+    graph_started = mono_ns();
+}
+void ps5lm_vk_graph_end(void)
+{
+    const uint64_t end = mono_ns();
+    PERF_ADD(perf_graphs, 1);
+    if (graph_started && end >= graph_started) PERF_ADD(perf_graph_ns, end - graph_started);
+    graph_started = 0;
+}
+/* One JSON object: the counters since launch and the knobs. */
+int ps5lm_vk_perf_json(char *out, size_t size)
+{
+#define LOAD(c) (unsigned long long)atomic_load_explicit(&(c), memory_order_relaxed)
+    return snprintf(out, size,
+        "{\"submissions\":%u,\"submit_ns\":%llu,\"dispatches\":%llu,\"fence_waits\":%llu,"
+        "\"fence_wait_ns\":%llu,\"semaphore_waits\":%llu,\"semaphore_wait_ns\":%llu,"
+        "\"graphs\":%llu,\"graph_ns\":%llu,\"knobs\":{\"disable_fusion\":%lld,"
+        "\"disable_graph_optimize\":%lld,\"nodes_per_submit\":%lld,\"submit_mflop\":%lld,"
+        "\"dmmv_wg\":%lld}}",
+        atomic_load(&submissions), LOAD(perf_submit_ns), LOAD(perf_dispatches), LOAD(perf_fence_waits),
+        LOAD(perf_fence_ns), LOAD(perf_semaphore_waits), LOAD(perf_semaphore_ns), LOAD(perf_graphs),
+        LOAD(perf_graph_ns), ps5lm_vk_knob(0), ps5lm_vk_knob(1), ps5lm_vk_knob(2), ps5lm_vk_knob(3),
+        ps5lm_vk_knob(4));
+#undef LOAD
+}
 #define TIMEOUT 2000000000ull
 #if defined(PS5LM_GGML_MODEL)
 #include "ggml-model.h"
@@ -159,16 +252,22 @@ static void requirements(VkDevice d, VkBuffer b, VkMemoryRequirements *r)
 }
 static VkResult wait_fences(VkDevice d, uint32_t n, const VkFence *f, VkBool32 all, uint64_t t)
 {
+    const uint64_t started = mono_ns();
     VkResult rc = ((PFN_vkWaitForFences)device_proc(d, "vkWaitForFences"))
         (d, n, f, all, t < TIMEOUT ? t : TIMEOUT);
     if (rc != VK_SUCCESS) ps5lm_ops_fatal("ggml_fence_failed");
+    PERF_ADD(perf_fence_waits, 1);
+    PERF_ADD(perf_fence_ns, mono_ns() - started);
     return rc;
 }
 static VkResult wait_semaphores(VkDevice d, const VkSemaphoreWaitInfo *i, uint64_t t)
 {
+    const uint64_t started = mono_ns();
     VkResult rc = ((PFN_vkWaitSemaphores)device_proc(d, "vkWaitSemaphores"))
         (d, i, t < TIMEOUT ? t : TIMEOUT);
     if (rc != VK_SUCCESS) ps5lm_ops_fatal("ggml_semaphore_failed");
+    PERF_ADD(perf_semaphore_waits, 1);
+    PERF_ADD(perf_semaphore_ns, mono_ns() - started);
     return rc;
 }
 static _Noreturn VkResult device_idle(VkDevice d)
@@ -196,8 +295,10 @@ static VkResult submit(VkQueue q, uint32_t n, const VkSubmitInfo *i, VkFence f)
     for (uint32_t j = 0; j < n; ++j)
         if (i[j].commandBufferCount > COMMAND_LIMIT) ps5lm_ops_fatal("ggml_command_limit");
     ps5lm_ops_submission(false);
+    const uint64_t started = mono_ns();
     VkResult rc = real_submit(q, n, i, f);
     if (rc != VK_SUCCESS) ps5lm_ops_fatal("ggml_submit_failed");
+    PERF_ADD(perf_submit_ns, mono_ns() - started);
     ps5lm_ops_submission(true);
     return rc;
 }
@@ -210,6 +311,7 @@ static void dispatch(VkCommandBuffer b, uint32_t x, uint32_t y, uint32_t z)
         sceKernelDebugOutText(0, line);
         ps5lm_ops_fatal("ggml_dispatch_limit");
     }
+    PERF_ADD(perf_dispatches, 1);
     real_dispatch(b, x, y, z);
 }
 PFN_vkVoidFunction ps5lm_vkGetDeviceProcAddr(VkDevice, const char *);

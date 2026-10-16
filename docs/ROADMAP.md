@@ -103,7 +103,7 @@ smaller fully resident MoE, not the earlier 27B/performance targets.
 
 **Done when** selected resident models produce correct output through the LAN API and repeatable local benchmarks are recorded.
 
-### Next on the GPU (2026-10-15; steps 0 to 3 done)
+### Next on the GPU (2026-10-16; steps 0 to 4 done)
 
 Steps 0 and 1 are done; nothing for steps 2 and 3 has been run. Each step is one bounded
 `ps5-native-test.sh` run, read before the next, as the dense baseline was.
@@ -157,13 +157,24 @@ benchmarks". Qwen3.5 0.8B through the same server: 1744 / 1884 tok/s prompt (128
 tokens), 214 / 211 tok/s generation, tokens identical to its model mode.
 The in-title variant below was not needed for that and is not done.
 
-**Next proposals** (none started): (a) find what holds generation at
-~210 tok/s for both models: count and time the ~13 submissions per token, then
-try ggml-vk's fusion and graph optimisation, which this title switches off, one
-at a time with the token check; (b) prompt processing with larger ubatches
-(64-512) once each submit's time is known to stay far below the 10 s
-device-lost limit; (c) the next model size step under AGENTS.md's rules,
-with a written budget. The plan as it was written:
+**4. Measured performance work: done (2026-10-16, night).** Counters and
+runtime knobs in the title (`GET /ps5lm/stats`, `POST /ps5lm/knobs`,
+`scripts/ps5-api-tune.py`) measured 15 settings per model in one serving
+window. Kept: ggml-vk fusion and graph optimisation on, a submission every
+1000 nodes, 512-token prompt chunks, and `read(2)` instead of `fread` for the
+model file. Qwen3.5 0.8B: prompt 1744/1884 → 3147/5264 tok/s, generation
+214 → 254.5; OLMoE-1B-7B: prompt 615/571 → 1429/2628, generation 232 → 327,
+load 45.6 → 3.6 s. Tokens identical to the earlier model-mode runs. See
+PORTING.md "Performance".
+
+**Next proposals** (none started): (a) generation is now set by GPU time per
+dispatch (~5 µs, 621 dispatches per Qwen token): find the remaining unfused
+op chains in ggml-vk for these graphs and fuse or batch them; (b) Granite 3B
+and Qwen3-30B with the new defaults; (c) SSD weight streaming: the file reads
+at 1.6–2.8 GB/s with one thread and 1–64 MiB `read()` calls, 3.7 GB/s with
+four, so streaming must use large `read()` calls (never `fread`); (d) the
+next model size step under AGENTS.md's rules, with a written budget. The old
+benchmark plan as it was written:
 
 In the title, not over the network first: fixed prompts of
 128 and 512 tokens and 64 generated tokens, three repeats after one warm-up,

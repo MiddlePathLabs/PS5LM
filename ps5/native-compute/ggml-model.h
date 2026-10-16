@@ -31,7 +31,9 @@
 #define PS5LM_MODEL_PROMPT "<|endoftext|><|user|>\nIn a short paragraph, explain how a GPU differs " \
     "from a CPU.\n<|assistant|>\n"
 #define PS5LM_MODEL_WEIGHTS_MIB 4608u
-#define PS5LM_MODEL_CONTEXT_MIB 512u
+/* 512 until the performance work: the server's context for 512-token physical
+ * batches needs about 60 MiB more (docs/PORTING.md "Performance"). */
+#define PS5LM_MODEL_CONTEXT_MIB 768u
 #define PS5LM_MODEL_TOTAL_MIB 6144u
 #define PS5LM_MODEL_SUBMIT_LIMIT 16384u
 #define PS5LM_MODEL_WATCHDOG_S 300u
@@ -78,9 +80,13 @@
  * recurrent state, outputs and compute buffers. The ledger caps the total. */
 #ifndef PS5LM_MODEL_WEIGHTS_MIB /* the first two models' budget; larger ones set their own above */
 #define PS5LM_MODEL_WEIGHTS_MIB 1152u
-/* Context was 256: run 2 measured 271 MiB, 67 MiB of it Vulkan as predicted. */
-#define PS5LM_MODEL_CONTEXT_MIB 384u
-#define PS5LM_MODEL_TOTAL_MIB 1536u
+/* Context was 256: run 2 measured 271 MiB, 67 MiB of it Vulkan as predicted.
+ * 384 until the performance work; the server's context for 512-token physical
+ * batches measured 506 MiB for Qwen3.5 (its scheduler block grows with the
+ * batch), so 768, and the total 2048 (was 1536; peak 1505 measured)
+ * (docs/PORTING.md "Performance"). */
+#define PS5LM_MODEL_CONTEXT_MIB 768u
+#define PS5LM_MODEL_TOTAL_MIB 2048u
 #define PS5LM_MODEL_SUBMIT_LIMIT 8192u
 #define PS5LM_MODEL_WATCHDOG_S 300u
 #define PS5LM_MODEL_SERVER_LOAD_S 120u

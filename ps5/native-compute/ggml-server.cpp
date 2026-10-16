@@ -22,8 +22,12 @@
 #include "llama.h"
 #include "ggml-model.h"
 #include "ggml-server.h"
+#include <fcntl.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -60,6 +64,23 @@ static uint64_t ps5lm_elapsed_ms(void)
         std::chrono::steady_clock::now() - host_start).count());
 }
 #define MODEL_PATH PS5LM_HOST_MODEL_PATH
+/* No Vulkan on the Mac: the knobs are kept and reported, nothing reads them. */
+static std::atomic<long long> host_knobs[5] = {-1, -1, -1, -1, -1};
+static const char *const host_knob_names[5] = {"disable_fusion", "disable_graph_optimize", "nodes_per_submit",
+                                               "submit_mflop", "dmmv_wg"};
+static int ps5lm_vk_set_knob(const char *name, long long value)
+{
+    for (int i = 0; i < 5; ++i)
+        if (std::strcmp(name, host_knob_names[i]) == 0) { host_knobs[i].store(value); return 0; }
+    return -1;
+}
+static int ps5lm_vk_perf_json(char *out, size_t size)
+{
+    return std::snprintf(out, size, "{\"host_rehearsal\":true,\"knobs\":{\"disable_fusion\":%lld,"
+                         "\"disable_graph_optimize\":%lld,\"nodes_per_submit\":%lld,\"submit_mflop\":%lld,"
+                         "\"dmmv_wg\":%lld}}", host_knobs[0].load(), host_knobs[1].load(), host_knobs[2].load(),
+                         host_knobs[3].load(), host_knobs[4].load());
+}
 #else
 extern "C" [[noreturn]] void ps5lm_ops_fatal(const char *stage);
 extern "C" void ps5lm_ops_checked(unsigned count, unsigned errors);
@@ -73,6 +94,8 @@ extern "C" unsigned ps5lm_submission_count(void);
 extern "C" void ps5lm_flush_output(void);
 extern "C" void ps5lm_report_allocations(void);
 extern "C" uint64_t ps5lm_elapsed_ms(void);
+extern "C" int ps5lm_vk_set_knob(const char *name, long long value);
+extern "C" int ps5lm_vk_perf_json(char *out, size_t size);
 #define MODEL_PATH PS5LM_MODEL_PATH
 #endif
 
@@ -121,6 +144,50 @@ extern "C" void ps5lm_server_response(int status)
 extern "C" void ps5lm_server_shutdown_request(void)
 {
     if (!shutdown_requested.exchange(true)) phase("shutdown_requested");
+}
+
+/* The prompt chunk a step of the server decodes (patches/server/0003), at most
+ * the context's n_batch; knobs and counters for GET/POST /ps5lm/... */
+static std::atomic<int> prompt_batch{PS5LM_SERVER_PROMPT_BATCH};
+static std::atomic<unsigned> knob_sets{0};
+
+extern "C" int ps5lm_server_prompt_batch(int n_batch)
+{
+    const int chunk = prompt_batch.load();
+    return chunk > 0 && chunk < n_batch ? chunk : n_batch;
+}
+
+extern "C" int ps5lm_server_set_knob(const char *name, long long value)
+{
+    if (!name) return -1;
+    if (std::strcmp(name, "prompt_batch") == 0) {
+        if (value == -1) value = PS5LM_SERVER_PROMPT_BATCH;
+        if (value < 1 || value > PS5LM_SERVER_BATCH) return -2;
+        prompt_batch.store(int(value));
+    } else {
+        const int rc = ps5lm_vk_set_knob(name, value);
+        if (rc != 0) return rc;
+    }
+    knob_sets.fetch_add(1);
+    char line[160];
+    std::snprintf(line, sizeof line, "PS5LM_SERVER_KNOB {\"name\":\"%.48s\",\"value\":%lld,\"ms\":%llu}\n", name,
+                  value, (unsigned long long)ps5lm_elapsed_ms());
+    sceKernelDebugOutText(0, line);
+    return 0;
+}
+
+extern "C" int ps5lm_server_stats(char *out, size_t size)
+{
+    char vk[1024];
+    const int n = ps5lm_vk_perf_json(vk, sizeof vk);
+    if (n <= 0 || size_t(n) >= sizeof vk) return -1;
+    return std::snprintf(out, size, "{\"vk\":%s,\"prompt_batch\":%d,\"context_batch\":%d,\"knob_sets\":%u,"
+                         "\"responses\":%u,\"errors\":%u,\"ms\":%llu,\"direct_live\":%llu,\"direct_peak\":%llu,"
+                         "\"vk_live\":%llu,\"vk_peak\":%llu}",
+                         vk, prompt_batch.load(), PS5LM_SERVER_BATCH, knob_sets.load(), responses.load(),
+                         errors.load(), (unsigned long long)ps5lm_elapsed_ms(),
+                         (unsigned long long)ps5lm_direct_live_bytes(), (unsigned long long)ps5lm_direct_peak_bytes(),
+                         ps5lm_vk_memory_live_bytes(), ps5lm_vk_memory_peak_bytes());
 }
 
 extern "C" void ps5lm_server_ready(void)
@@ -270,6 +337,138 @@ static void *server_main(void *)
     return nullptr;
 }
 
+/* Storage read speed for the next phase (SSD weight streaming), measured after
+ * the server has stopped and freed: read-only, the pinned model file, fixed
+ * regions from its start (read first during the load, so the least likely to
+ * still be cached), one 64 MiB heap buffer. Sequential reads of 1, 4, 16 and
+ * 64 MiB, then four threads with their own descriptors, then the first region
+ * again (a cached read, for comparison). Bounded: a test stops at 10 s and the
+ * probe at 30 s. One PS5LM_STORAGE_PROBE line. */
+/* Seven regions: four sequential, one parallel, one fread; 96 MiB, or less for a small file. */
+static constexpr size_t PROBE_REGION = std::min<uint64_t>(uint64_t(96) << 20, (PS5LM_MODEL_BYTES / 7) & ~((uint64_t(1) << 20) - 1));
+static constexpr unsigned PROBE_THREADS = 4;
+
+static double probe_now_s()
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+/* Reads [offset, offset + bytes) in chunk-sized reads; the bytes read, or -1. */
+static long long probe_read(int fd, char *buffer, size_t chunk, uint64_t offset, size_t bytes, double deadline)
+{
+    if (lseek(fd, off_t(offset), SEEK_SET) != off_t(offset)) return -1;
+    size_t done = 0;
+    while (done < bytes) {
+        const size_t want = std::min(chunk, bytes - done);
+        size_t got = 0;
+        while (got < want) {
+            const ssize_t n = read(fd, buffer + got, want - got);
+            if (n <= 0) return -1;
+            got += size_t(n);
+        }
+        done += got;
+        if (probe_now_s() > deadline) break;
+    }
+    return (long long)done;
+}
+
+struct probe_thread {
+    char *buffer;
+    uint64_t offset;
+    size_t bytes;
+    double deadline;
+    long long done;
+};
+
+static void *probe_worker(void *arg)
+{
+    probe_thread *t = static_cast<probe_thread *>(arg);
+    const int fd = open(MODEL_PATH, O_RDONLY | O_CLOEXEC);
+    t->done = fd < 0 ? -1 : probe_read(fd, t->buffer, size_t(4) << 20, t->offset, t->bytes, t->deadline);
+    if (fd >= 0) close(fd);
+    return nullptr;
+}
+
+static void storage_probe()
+{
+    static const unsigned chunks_mib[] = {1, 4, 16, 64};
+    std::string json = "{\"file_bytes\":" + std::to_string(PS5LM_MODEL_BYTES) + ",\"region_mib\":" +
+                       std::to_string(PROBE_REGION >> 20) + ",\"tests\":[";
+    char *buffer = PROBE_REGION >= (size_t(16) << 20) ? static_cast<char *>(std::malloc(size_t(64) << 20)) : nullptr;
+    const int fd = buffer ? open(MODEL_PATH, O_RDONLY | O_CLOEXEC) : -1;
+    const double probe_deadline = probe_now_s() + 30.0;
+    bool first = true;
+    auto add = [&](const char *kind, unsigned chunk, unsigned threads, uint64_t offset, long long bytes, double s) {
+        char item[256];
+        std::snprintf(item, sizeof item, "%s{\"kind\":\"%s\",\"chunk_mib\":%u,\"threads\":%u,\"offset_mib\":%llu,"
+                      "\"bytes\":%lld,\"s\":%.3f,\"mb_s\":%.1f}", first ? "" : ",", kind, chunk, threads,
+                      (unsigned long long)(offset >> 20), bytes, s, bytes > 0 && s > 0 ? bytes / s / 1e6 : 0.0);
+        json += item;
+        first = false;
+    };
+    if (fd >= 0) {
+        uint64_t offset = 0;
+        for (unsigned c : chunks_mib) {
+            if (probe_now_s() > probe_deadline) break;
+            const double t0 = probe_now_s();
+            const long long n = probe_read(fd, buffer, size_t(c) << 20, offset, PROBE_REGION,
+                                           std::min(t0 + 10.0, probe_deadline));
+            add("sequential", c, 1, offset, n, probe_now_s() - t0);
+            offset += PROBE_REGION;
+        }
+        if (probe_now_s() < probe_deadline) {
+            probe_thread threads[PROBE_THREADS];
+            pthread_t ids[PROBE_THREADS];
+            unsigned started = 0;
+            const double t0 = probe_now_s();
+            for (unsigned i = 0; i < PROBE_THREADS; ++i) {
+                threads[i] = {buffer + (size_t(i) << 23), offset + i * (PROBE_REGION / PROBE_THREADS),
+                              PROBE_REGION / PROBE_THREADS, std::min(t0 + 10.0, probe_deadline), -1};
+                if (pthread_create(&ids[i], nullptr, probe_worker, &threads[i]) == 0) ++started;
+                else break;
+            }
+            long long total = 0;
+            for (unsigned i = 0; i < started; ++i) {
+                pthread_join(ids[i], nullptr);
+                total += threads[i].done > 0 ? threads[i].done : 0;
+            }
+            add("parallel", 4, started, offset, total, probe_now_s() - t0);
+            offset += PROBE_REGION;
+        }
+        if (probe_now_s() < probe_deadline) {
+            /* What llama.cpp's loader does without the read patch: 1 MiB freads
+             * through a default-buffered FILE. */
+            FILE *f = std::fopen(MODEL_PATH, "rb");
+            long long n = -1;
+            const double t0 = probe_now_s();
+            if (f && std::fseek(f, long(offset), SEEK_SET) == 0) {
+                n = 0;
+                const double deadline = std::min(t0 + 10.0, probe_deadline);
+                while (size_t(n) < PROBE_REGION && probe_now_s() < deadline) {
+                    if (std::fread(buffer, size_t(1) << 20, 1, f) != 1) { n = -1; break; }
+                    n += 1 << 20;
+                }
+            }
+            add("fread_stdio", 1, 1, offset, n, probe_now_s() - t0);
+            if (f) std::fclose(f);
+            offset += PROBE_REGION;
+        }
+        if (probe_now_s() < probe_deadline) {
+            const double t0 = probe_now_s();
+            const long long n = probe_read(fd, buffer, size_t(16) << 20, 0, PROBE_REGION,
+                                           std::min(t0 + 10.0, probe_deadline));
+            add("reread_first_region", 16, 1, 0, n, probe_now_s() - t0);
+        }
+        close(fd);
+    }
+    std::free(buffer);
+    json += "],\"ran\":";
+    json += fd >= 0 ? "true}" : "false}";
+    const std::string line = "PS5LM_STORAGE_PROBE " + json + "\n";
+    std::fputs(line.c_str(), stdout);
+    klog(line.c_str());
+}
+
 static void sleep_ms(unsigned ms)
 {
     timespec t{time_t(ms / 1000), long(ms % 1000) * 1000000L};
@@ -326,6 +525,8 @@ extern "C" int ps5lm_run_ggml_ops(void)
         }
         pthread_join(server, nullptr);
         phase("freed");
+        storage_probe();
+        phase("storage_probe_end");
         const int rc = server_rc.load();
         const int reason = stop_reason.load();
         const unsigned long long vk_live = ps5lm_vk_memory_live_bytes();

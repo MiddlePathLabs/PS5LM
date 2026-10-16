@@ -1,0 +1,83 @@
+PS5LM native title server mode (ps5/native-compute/ggml-server.cpp), __PROSPERO__ (or a host
+rehearsal with PS5LM_SERVER_HOOKS) only: GET /ps5lm/stats (performance counters and tuning
+knobs), POST /ps5lm/knobs (set knobs, each checked by the title), and the prompt chunk a step
+of update_slots() fills, at most the context's n_batch (docs/PORTING.md "Performance").
+
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -38,6 +38,15 @@
+ 
+ constexpr int HTTP_POLLING_SECONDS = 1;
+ 
++#if defined(__PROSPERO__) || defined(PS5LM_SERVER_HOOKS)
++// PS5LM native title (ps5/native-compute/ggml-server.cpp): the prompt chunk a
++// step of update_slots() fills, at most the context's n_batch (POST /ps5lm/knobs).
++extern "C" int ps5lm_server_prompt_batch(int n_batch);
++#define PS5LM_PROMPT_BATCH(n) ps5lm_server_prompt_batch(n)
++#else
++#define PS5LM_PROMPT_BATCH(n) (n)
++#endif
++
+ static common_speculative_output_limits server_output_limits(const common_params & params) {
+     if (params.embedding ||
+             (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
+@@ -3099,7 +3108,7 @@
+         });
+ 
+         // process in chunks of params.n_batch
+-        int32_t n_batch  = llama_n_batch(ctx_tgt);
++        int32_t n_batch  = PS5LM_PROMPT_BATCH(llama_n_batch(ctx_tgt));
+         int32_t n_ubatch = llama_n_ubatch(ctx_tgt);
+ 
+         auto & alora_scale       = batch.alora_scale;
+--- a/tools/server/server.cpp
++++ b/tools/server/server.cpp
+@@ -55,6 +55,8 @@
+ extern "C" void ps5lm_server_response(int status);
+ extern "C" void ps5lm_server_shutdown_request(void);
+ extern "C" void ps5lm_server_ready(void);
++extern "C" int ps5lm_server_stats(char * out, size_t size);
++extern "C" int ps5lm_server_set_knob(const char * name, long long value);
+ #define PS5LM_RESPONSE(status) ps5lm_server_response(status)
+ #else
+ #define PS5LM_RESPONSE(status) ((void) 0)
+@@ -334,6 +336,39 @@
+         res->data = safe_json_to_str({{"shutdown", "requested"}});
+         return res;
+     }));
++    // Performance counters and tuning knobs (docs/PORTING.md "Performance").
++    // GET: counters since launch and the knobs; POST: {"knob": integer, ...},
++    // every name and range checked by the title (-1 restores a default).
++    auto ps5lm_stats = []() {
++        auto res = std::make_unique<server_http_res>();
++        char buffer[2048];
++        const int n = ps5lm_server_stats(buffer, sizeof(buffer));
++        if (n <= 0 || (size_t) n >= sizeof(buffer)) {
++            throw std::runtime_error("ps5lm stats do not fit");
++        }
++        res->data = std::string(buffer, (size_t) n);
++        return res;
++    };
++    ctx_http.get("/ps5lm/stats", ex_wrapper([ps5lm_stats](const server_http_req &) {
++        return ps5lm_stats();
++    }));
++    ctx_http.post("/ps5lm/knobs", ex_wrapper([ps5lm_stats](const server_http_req & req) {
++        const json body = json::parse(req.body);
++        if (!body.is_object()) {
++            throw std::invalid_argument("knobs: expected an object");
++        }
++        for (const auto & [name, value] : body.items()) {
++            if (!value.is_number_integer()) {
++                throw std::invalid_argument("knobs: " + name + " is not an integer");
++            }
++        }
++        for (const auto & [name, value] : body.items()) {
++            if (ps5lm_server_set_knob(name.c_str(), value.get<long long>()) != 0) {
++                throw std::invalid_argument("knobs: unknown knob or value out of range: " + name);
++            }
++        }
++        return ps5lm_stats();
++    }));
+ #endif
+ 
+     // return 403 for disabled features

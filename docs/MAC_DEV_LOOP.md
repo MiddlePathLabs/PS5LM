@@ -111,11 +111,12 @@ The test script waits for the title while you use the API, so start it in the ba
 scripts/ps5-native-test.sh -d build/native-server/PPSA99041 -o native-server.out -t 960 PPSA99041 &
 scripts/ps5-api-check.py --variant moe          # waits for /health, then the correctness checks
 scripts/ps5-api-bench.py --label "what changed"  # 128- and 512-token prompts, 128 tokens, 1 warm-up + 3
+scripts/ps5-api-tune.py --variant dense --plan cadence   # optional: runtime knobs, each with the token check
 curl -X POST -H 'Content-Type: application/json' -d '{}' http://$PS5_HOST:8081/ps5lm/shutdown
 wait                                            # then read test-results/ps5/PPSA99041/latest/result.json
 ```
 
-The check writes `test-results/ps5/api-check/<time>/check.json`; the benchmark writes `bench.json` and `table.md` to `test-results/ps5/api-bench/<time>/` (median, min and max of llama-server's own prompt and generation rates, and the wall time). Compare benchmarks only between runs with the same model file and settings. `-t 960` covers the title's 840 s watchdog. Without the shutdown request the window ends by itself after 600 s. The API is unauthenticated: it exists only while the window is open, and nothing restarts it.
+The check writes `test-results/ps5/api-check/<time>/check.json`; the benchmark writes `bench.json` and `table.md` to `test-results/ps5/api-bench/<time>/` (median, min and max of llama-server's own prompt and generation rates, and the wall time). `GET /ps5lm/stats` returns the title's counters (submissions, dispatches, submit, fence-wait and graph times) and `POST /ps5lm/knobs` sets the runtime knobs (fusion, graph optimisation, submit cadence, mat-vec workgroup, prompt chunk; a bad name or value is a 400 and fails the run); `scripts/ps5-api-tune.py` uses both and writes `test-results/ps5/api-tune/<time>/` ([PORTING.md](PORTING.md#performance-measured-tuning-2026-10-15-night)). Compare benchmarks only between runs with the same model file and settings. `-t 960` covers the title's 840 s watchdog. Without the shutdown request the window ends by itself after 600 s. The API is unauthenticated: it exists only while the window is open, and nothing restarts it.
 
 ## Common failures
 

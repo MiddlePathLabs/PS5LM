@@ -372,6 +372,63 @@ run and one server-mode run with the benchmark.
   memory figures and submission count, generation 175.2 tok/s.
   `test-results/ps5/PPSA99041/20261015-214817/`.
 
+**Performance work** (2026-10-15/16 night; method, knobs and budget in
+[PORTING.md](PORTING.md#performance-measured-tuning-2026-10-15-night)). All
+runs passed with exit 0 and `"closed": true`; the console answered after each.
+
+- **Run 1, tuning window, Qwen3.5 0.8B** (`server-qwen`, eboot
+  `821103cd…eebb`: counters, runtime knobs, 512-token context, defaults equal
+  to the old settings): API check 9/9 identical to the model mode; 15
+  configurations through `scripts/ps5-api-tune.py`, every one with check tokens
+  identical to the model mode's and identical benchmark outputs. Baseline
+  1731/1867 tok/s prompt (128/512), 212.0/211.6 generation, matching the
+  earlier record. Context +506 MiB (cap 512), direct peak 1505 MiB (cap 1536),
+  Vulkan peak 828 MiB, 0 after free, 404 responses, 0 errors.
+  `test-results/ps5/PPSA99041/20261015-233747/`, `…/api-check/20261015-233751/`,
+  `…/api-tune/20261015-233814/`.
+- **Run 2, tuning window, OLMoE-1B-7B** (`server-olmoe`, eboot
+  `b37f71fb…64c8`, same build): 9/9, 15 configurations all identical. Baseline
+  615/571 prompt, 231.5/221.7 generation. Load 45.6 s; context +359 MiB (cap
+  768), direct peak 4522 MiB (cap 6144), Vulkan peak 4345 MiB, 0 after free.
+  Storage probe: `read()` of the file's first regions 1415 (1 MiB) / 2830
+  (4 MiB) / 2237 (16 MiB) / 2289 (64 MiB) MB/s, four threads 3207 MB/s.
+  `…/PPSA99041/20261015-234129/`, `…/api-check/20261015-234134/`,
+  `…/api-tune/20261015-234228/`.
+- **Run 3, model mode Qwen3.5 0.8B, kept defaults** (eboot `8647174d…a058e`:
+  fusion and graph optimisation on, 1000 nodes per submit, `read(2)` loader):
+  pass, rule `prefix` (first 22 equal, the 0.244 tie), 32 tokens identical to
+  the earlier model-mode run `20261015-195528`; 25/25, 2 splits; weights
+  +764 MiB, context +267 MiB, direct peak 1093 MiB; load 1.26 s (file cached);
+  generation 150.4 tok/s on the title's clock (was 140.4); 1010 submissions
+  (was 1143). `…/PPSA99041/20261015-235201/`.
+- **Run 4, model mode OLMoE, kept defaults** (eboot `6ca3ae4f…e898`): pass,
+  rule `prefix` (first 25 equal), 32 tokens identical to `20261015-212150`;
+  17/17, 2 splits; **load 3.61 s (was 45.6 s)**, weights +4022 MiB, context
+  +166 MiB, direct peak 4250 MiB; generation 221.4 tok/s on the title's clock
+  (was 175.6). `…/PPSA99041/20261015-235237/`.
+- **Run 5, server Qwen3.5 0.8B, kept defaults** (eboot `ab264294…b9`, chunk
+  512): 9/9 identical to the model mode; benchmark 3146.6/5264.0 prompt,
+  254.5/252.7 generation; submit cadences around the defaults (25 and
+  100 MFLOP splits, 500 and 2000 nodes) all identical and none faster. Context
+  +506 MiB (cap 768), direct peak 1410 MiB (cap 2048), Vulkan peak 828 MiB,
+  0 after free, 183 responses, 0 errors. Storage probe on the cached file:
+  `read()` 4.9–5.6 GB/s, `fread` 4.3 GB/s. `…/PPSA99041/20261015-235322/`,
+  `…/api-check/20261015-235327/`, `…/api-bench/20261015-235335/`,
+  `…/api-tune/20261015-235340/`.
+- **Run 6, server OLMoE, kept defaults** (eboot `134e1f51…a365`): 9/9
+  identical; benchmark 1429.0/2628.4 prompt, 326.9/309.2 generation; cadences
+  none faster. Load 3.58 s; context +359 MiB, direct peak 4501 MiB, Vulkan
+  peak 4345 MiB, 0 after free. Storage probe: `read()` 1657 (1 MiB) / 2834
+  (4 MiB) / 2356 (16 MiB) / 2514 (64 MiB) MB/s, four threads 3712 MB/s,
+  **`fread` of an uncached region 92.6 MB/s**, cached re-read 4870 MB/s.
+  `…/PPSA99041/20261015-235759/`, `…/api-check/20261015-235804/`,
+  `…/api-bench/20261015-235816/`, `…/api-tune/20261015-235821/`.
+
+| Model (API, 128/512-token prompt) | Prompt tok/s before → after | Generation tok/s before → after | Load before → after |
+|---|---|---|---|
+| Qwen3.5 0.8B Q4_K_M | 1744 / 1884 → 3147 / 5264 | 214.0 / 210.9 → 254.5 / 252.7 | 0.8 s → 1.3 s (cached file) |
+| OLMoE-1B-7B-0125 Q4_K_M | 615 / 571 → 1429 / 2628 | 232.4 / 223.1 → 326.9 / 309.2 | 45.6 s → 3.6 s |
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

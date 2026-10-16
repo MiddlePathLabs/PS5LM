@@ -1,0 +1,76 @@
+PS5 native title (__PROSPERO__) only: read model files with read(2) on a descriptor of
+their own instead of fread. This libc's fread reads a file that is not cached at ~92 MB/s
+(measured on the console: 1 MiB freads of an uncached region 92.6 MB/s, of a cached file
+4.3 GB/s), while read(2) with 1 MiB or larger requests reads at 1.6-3.7 GB/s; the no-mmap
+loader's OLMoE load fell from 45.6 s to 3.6 s (docs/PORTING.md "Performance"). The FILE
+keeps the position (seek after each read); everything else is unchanged.
+
+--- a/src/llama-mmap.cpp
++++ b/src/llama-mmap.cpp
+@@ -221,6 +221,14 @@
+         if (fp == NULL) {
+             throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
+         }
++#if defined(__PROSPERO__)
++        // PS5LM: model files are read with read(2) on a descriptor of their own;
++        // fread reads an uncached file at ~92 MB/s here, read(2) with large
++        // requests at 1.6-3.7 GB/s (docs/PORTING.md "Performance").
++        if (std::strcmp(mode, "rb") == 0) {
++            ps5_fd = open(fname.c_str(), O_RDONLY | O_CLOEXEC);
++        }
++#endif
+         seek(0, SEEK_END);
+         size = tell();
+         seek(0, SEEK_SET);
+@@ -270,6 +278,29 @@
+         if (fd == -1) {
+             const size_t curr_off = tell();
+             const size_t to_read = std::min(len, size - curr_off);
++#if defined(__PROSPERO__)
++            if (ps5_fd != -1) {
++                if (lseek(ps5_fd, (off_t) curr_off, SEEK_SET) != (off_t) curr_off) {
++                    throw std::runtime_error(format("seek error: %s", strerror(errno)));
++                }
++                size_t done = 0;
++                while (done < to_read) {
++                    const ssize_t ret = ::read(ps5_fd, reinterpret_cast<char *>(ptr) + done, to_read - done);
++                    if (ret == -1 && errno == EINTR) {
++                        continue;
++                    }
++                    if (ret == -1) {
++                        throw std::runtime_error(format("read error: %s", strerror(errno)));
++                    }
++                    if (ret == 0) {
++                        throw std::runtime_error("unexpectedly reached end of file");
++                    }
++                    done += (size_t) ret;
++                }
++                seek(curr_off + to_read, SEEK_SET); // the FILE's position follows
++                return;
++            }
++#endif
+ 
+             std::size_t ret = std::fread(ptr, to_read, 1, fp);
+             if (ferror(fp)) {
+@@ -388,6 +419,11 @@
+     }
+ 
+     ~impl() {
++#if defined(__PROSPERO__)
++        if (ps5_fd != -1) {
++            close(ps5_fd);
++        }
++#endif
+         if (fd != -1) {
+             close(fd);
+         } else if (owns_fp) {
+@@ -395,6 +431,9 @@
+         }
+     }
+     int fd = -1;
++#if defined(__PROSPERO__)
++    int ps5_fd = -1;
++#endif
+     std::string fname;
+ #endif
+ 

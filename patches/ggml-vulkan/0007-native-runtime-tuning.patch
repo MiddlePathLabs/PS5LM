@@ -1,0 +1,138 @@
+PS5LM native title only (__PROSPERO__): runtime tuning knobs and per-graph timing for the
+performance work (docs/PORTING.md "Performance"). ps5/native-compute/ggml-dispatch.c holds
+the knobs (-1 = what device creation chose from the closed environment) and the counters.
+Latched once per graph on the computing thread: fusion (with the ADD+RMS_NORM partials),
+graph optimisation, nodes per submit, the flop-based submit split; read at each mat-vec
+pipeline choice: the workgroup size. No change on other platforms.
+
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -340,6 +340,16 @@
+                                         VkDeviceSize{ctx->device->properties.limits.maxStorageBufferRange});
+     return range;
+ }
++
++#if defined(__PROSPERO__)
++// PS5LM native title (ps5/native-compute/ggml-dispatch.c): runtime tuning
++// knobs and per-graph timing. A knob of -1 keeps the device-creation value.
++extern "C" long long ps5lm_vk_knob(int which);
++extern "C" void ps5lm_vk_graph_begin(void);
++extern "C" void ps5lm_vk_graph_end(void);
++enum { PS5LM_KNOB_DISABLE_FUSION, PS5LM_KNOB_DISABLE_GRAPH_OPTIMIZE, PS5LM_KNOB_NODES_PER_SUBMIT,
++       PS5LM_KNOB_SUBMIT_MFLOP, PS5LM_KNOB_DMMV_WG };
++#endif
+ 
+ void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
+ #if defined(__PROSPERO__)
+@@ -4964,6 +4974,13 @@
+         device->add_rms_fusion = !device->disable_fusion &&
+                                  device->subgroup_arithmetic &&
+                                  device->vendor_id != VK_VENDOR_ID_INTEL;
++#if defined(__PROSPERO__)
++        device->ps5lm_add_rms_fusion_capable = device->subgroup_arithmetic &&
++                                               device->vendor_id != VK_VENDOR_ID_INTEL;
++        device->ps5lm_default_disable_fusion = device->disable_fusion;
++        device->ps5lm_default_disable_graph_optimize = device->disable_graph_optimize;
++        device->ps5lm_default_nodes_per_submit = device->max_nodes_per_submit;
++#endif
+         device->partials_binding_alignment =
+             std::max(4u, (uint32_t)device->properties.limits.minStorageBufferOffsetAlignment);
+ 
+@@ -5642,6 +5659,12 @@
+         }
+     }
+ 
++#if defined(__PROSPERO__)
++    {
++        const long long knob = ps5lm_vk_knob(PS5LM_KNOB_DMMV_WG);
++        if (knob >= 0) dmmv_wg = knob ? DMMV_WG_SIZE_LARGE : DMMV_WG_SIZE_SUBGROUP;
++    }
++#endif
+     if (b_type == GGML_TYPE_Q8_1) {
+         if (ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
+             dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
+@@ -5730,6 +5753,12 @@
+         }
+     }
+ 
++#if defined(__PROSPERO__)
++    {
++        const long long knob = ps5lm_vk_knob(PS5LM_KNOB_DMMV_WG);
++        if (knob >= 0) dmmv_wg = knob ? DMMV_WG_SIZE_LARGE : DMMV_WG_SIZE_SUBGROUP;
++    }
++#endif
+     if (b_type == GGML_TYPE_Q8_1) {
+         if (ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
+             dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
+@@ -14239,6 +14268,18 @@
+     ctx->device->diag_prev_start = -1;
+     ctx->device->diag_prev_end = -1;
+ 
++#if defined(__PROSPERO__)
++    // Knobs are latched here, once per graph, on the computing thread.
++    ps5lm_vk_graph_begin();
++    {
++        const long long fusion = ps5lm_vk_knob(PS5LM_KNOB_DISABLE_FUSION);
++        ctx->device->disable_fusion = fusion < 0 ? ctx->device->ps5lm_default_disable_fusion : fusion != 0;
++        ctx->device->add_rms_fusion = !ctx->device->disable_fusion && ctx->device->ps5lm_add_rms_fusion_capable;
++        const long long nodes = ps5lm_vk_knob(PS5LM_KNOB_NODES_PER_SUBMIT);
++        ctx->device->max_nodes_per_submit = nodes > 0 ? (uint32_t) nodes : ctx->device->ps5lm_default_nodes_per_submit;
++    }
++#endif
++
+     if (vk_instance.debug_utils_support) {
+         ctx->device->debug_cmdbuf_idx = 0;
+     }
+@@ -14328,6 +14369,13 @@
+         }
+     }
+     uint64_t flops_per_submit = std::min(flops_cap, ctx->last_total_flops / 40u);
++#if defined(__PROSPERO__)
++    {
++        // 0 turns the flop-based split off; the node count still applies.
++        const long long mflop = ps5lm_vk_knob(PS5LM_KNOB_SUBMIT_MFLOP);
++        if (mflop >= 0) flops_per_submit = (uint64_t) mflop * 1000000ull;
++    }
++#endif
+ 
+     auto const submit_after = [&](int start, int end) {
+         if (ctx->device->serialize_submissions) {
+@@ -14729,6 +14777,9 @@
+     if (!ctx->device->support_async) {
+         ggml_vk_synchronize(ctx);
+     }
++#if defined(__PROSPERO__)
++    ps5lm_vk_graph_end();
++#endif
+ 
+     return GGML_STATUS_SUCCESS;
+ 
+@@ -14740,6 +14791,12 @@
+     VK_LOG_DEBUG("ggml_vk_graph_optimize(" << graph->n_nodes << " nodes)");
+     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+ 
++#if defined(__PROSPERO__)
++    {
++        const long long knob = ps5lm_vk_knob(PS5LM_KNOB_DISABLE_GRAPH_OPTIMIZE);
++        ctx->device->disable_graph_optimize = knob < 0 ? ctx->device->ps5lm_default_disable_graph_optimize : knob != 0;
++    }
++#endif
+     if (ctx->device->disable_graph_optimize) {
+         return;
+     }
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+@@ -732,6 +732,13 @@
+     bool add_rms_fusion;
+     uint32_t partials_binding_alignment;
+     uint32_t max_nodes_per_submit;
++#if defined(__PROSPERO__)
++    // PS5LM runtime knobs (patch 0007): what device creation chose, restored when a knob is -1.
++    uint32_t ps5lm_default_nodes_per_submit;
++    bool ps5lm_add_rms_fusion_capable;
++    bool ps5lm_default_disable_fusion;
++    bool ps5lm_default_disable_graph_optimize;
++#endif
+ 
+     bool shader_64b_indexing;
+ 
