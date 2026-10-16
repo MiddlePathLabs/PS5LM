@@ -8,12 +8,15 @@
  * local version-script entry (scripts/build-native-compute.sh), as mkstemp is:
  * a title that exported libc's own names would be refused by the converter.
  * None of them is on the inference path except the resolver, which cpp-httplib
- * uses even for the numeric address it binds to.
+ * uses even for the numeric address it binds to. localeconv is the exception
+ * to "no module provides": libc's own reports a locale the JSON reader cannot
+ * use, so it is replaced, not supplied.
  */
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <locale.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <pwd.h>
@@ -234,4 +237,23 @@ int ps5lm_remove(const char *path)
     (void)path;
     errno = EPERM;
     return -1;
+}
+
+/* The console reports an empty decimal point while its strtod reads '.'.
+ * nlohmann::json puts the reported point into a number before strtod, so a
+ * float in any request ("temperature": 0.7) failed its assertion and took the
+ * server down. This is the C locale's. From cobanov/PS5LM 4f57e0e. */
+struct lconv *ps5lm_localeconv(void)
+{
+    static struct lconv c = {
+        .decimal_point = ".", .thousands_sep = "", .grouping = "",
+        .int_curr_symbol = "", .currency_symbol = "", .mon_decimal_point = "",
+        .mon_thousands_sep = "", .mon_grouping = "", .positive_sign = "", .negative_sign = "",
+        .int_frac_digits = CHAR_MAX, .frac_digits = CHAR_MAX, .p_cs_precedes = CHAR_MAX,
+        .p_sep_by_space = CHAR_MAX, .n_cs_precedes = CHAR_MAX, .n_sep_by_space = CHAR_MAX,
+        .p_sign_posn = CHAR_MAX, .n_sign_posn = CHAR_MAX, .int_p_cs_precedes = CHAR_MAX,
+        .int_n_cs_precedes = CHAR_MAX, .int_p_sep_by_space = CHAR_MAX, .int_n_sep_by_space = CHAR_MAX,
+        .int_p_sign_posn = CHAR_MAX, .int_n_sign_posn = CHAR_MAX,
+    };
+    return &c;
 }

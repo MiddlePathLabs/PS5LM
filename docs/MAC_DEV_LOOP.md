@@ -111,7 +111,7 @@ The test script waits for the title while you use the API, so start it in the ba
 
 ```sh
 scripts/ps5-native-test.sh -d build/native-server/PPSA99041 -o native-server.out -t 960 PPSA99041 &
-scripts/ps5-api-check.py --variant moe          # waits for /health, then the correctness checks
+scripts/ps5-api-check.py --variant moe --soak 100   # waits for /health; correctness, floats, Anthropic, template, 100 requests
 scripts/ps5-api-bench.py --label "what changed"  # 128- and 512-token prompts, 128 tokens, 1 warm-up + 3
 scripts/ps5-api-vision.py --model-run RUN --reference REF.json   # vision builds (server-vl4b): one image
 scripts/ps5-api-tune.py --variant dense --plan cadence   # optional: runtime knobs, each with the token check

@@ -30,11 +30,29 @@ if [ ! -f "$host/build.ninja" ]; then
         -Dbuild-tests=false -Dvalgrind=disabled -Dlibunwind=disabled -Dzstd=disabled -Dxmlconfig=disabled -Dtools=
 fi
 "${host_env[@]}" ninja -C "$host" -j "${BUILD_JOBS:-4}" src/compiler/clc/mesa_clc src/compiler/spirv/vtn_bindgen2
+# The driver builds from an export of the pinned Mesa with patches/mesa applied,
+# never from .deps/PS5_Mesa itself (as build-native-llama.sh does for llama.cpp).
+# rsync -c rewrites only files whose content changed, so ninja rebuilds only those.
+mesa_src="$work/mesa-source"
+stage="$(mktemp -d "$work/mesa-stage.XXXXXX")"
+git -C "$mesa" archive HEAD | tar -x -C "$stage"
+for p in "$root"/patches/mesa/*.patch; do
+    [ -e "$p" ] || continue
+    patch --silent -d "$stage" -p1 < "$p"
+done
+# Meson's zlib fallback, already fetched into the pinned tree: no download.
+for d in packagecache zlib-1.3.1; do
+    [ -e "$mesa/subprojects/$d" ] && cp -R "$mesa/subprojects/$d" "$stage/subprojects/"
+done
+mkdir -p "$mesa_src"
+rsync -a -c --delete "$stage/" "$mesa_src/"
+rm -rf "$stage"
 printf "[constants]\nsdk = '%s'\n" "$sdk" > "$work/cross-constants.ini"
 cross_env=(env "PATH=$host/src/compiler/clc:$host/src/compiler/spirv:$python/bin:$target_llvm/bin:/opt/homebrew/bin:/usr/bin:/bin"
     "LLVM_CONFIG=$target_llvm/bin/llvm-config")
-if [ ! -f "$work/radv-release/build.ninja" ]; then
-    "${cross_env[@]}" meson setup "$work/radv-release" "$mesa" --cross-file "$work/cross-constants.ini" \
+radv="$work/radv-ps5lm"
+if [ ! -f "$radv/build.ninja" ]; then
+    "${cross_env[@]}" meson setup "$radv" "$mesa_src" --cross-file "$work/cross-constants.ini" \
         --cross-file "$upstream/tooling/radv/ps5-cross.ini" -Dvulkan-drivers=amd -Dgallium-drivers= -Dplatforms= \
         -Dradv-winsys=ps5 -Dllvm=disabled -Damd-use-llvm=false -Dvideo-codecs= \
         -Dbuildtype=debugoptimized -Db_ndebug=true -Dglx=disabled -Degl=disabled -Dgbm=disabled \
@@ -43,11 +61,11 @@ if [ ! -f "$work/radv-release/build.ninja" ]; then
         -Dshader-cache=enabled -Dbuild-tests=false -Dvulkan-layers= -Dtools= -Dmesa-clc=system \
         -Dradv-build-id=1ba9874f478657ccf6da72ce55f0260164cc0bd0
 fi
-"${cross_env[@]}" ninja -C "$work/radv-release" -j "${BUILD_JOBS:-4}" src/amd/vulkan/libvulkan_radeon.a
-python3 - "$work" "$host_llvm" "$target_llvm" "$sdk" <<'PY'
+"${cross_env[@]}" ninja -C "$radv" -j "${BUILD_JOBS:-4}" src/amd/vulkan/libvulkan_radeon.a
+python3 - "$work" "$host_llvm" "$target_llvm" "$sdk" "$root" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
-work, host, target, sdk = map(pathlib.Path, sys.argv[1:])
-archive = work / 'radv-release/src/amd/vulkan/libvulkan_radeon.a'
+work, host, target, sdk, root = map(pathlib.Path, sys.argv[1:])
+archive = work / 'radv-ps5lm/src/amd/vulkan/libvulkan_radeon.a'
 report = {
     'console_access_performed': False, 'hardware_verified': False,
     'ps5_vulkan_revision': 'f410e67a0241b3e8edcdbcd2a9b285dfc4a412ed',
@@ -59,6 +77,9 @@ report = {
     'variant': 'debugoptimized, b_ndebug=true, radv-winsys=ps5',
     'radv_archive': str(archive), 'radv_archive_bytes': archive.stat().st_size,
     'radv_archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+    'mesa_source': str(work / 'mesa-source') + ' (export of the pinned revision with patches/mesa applied)',
+    'mesa_patches': {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+                     for p in sorted((root / 'patches/mesa').glob('*.patch'))},
     'closure_limit': 'Static driver archive only. Native link, loader compatibility and GPU behavior are separate checks.',
 }
 (work / 'provenance.json').write_text(json.dumps(report, indent=2) + '\n')

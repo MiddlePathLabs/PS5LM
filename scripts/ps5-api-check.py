@@ -13,8 +13,10 @@ gives the model mode's prompt tokens; a temperature-0 /completion of that prompt
 GPU-vs-CPU rule against the CPU reference (first 8 tokens identical, or the
 first difference where the CPU's top two logits are within 0.5, no run of 8
 identical tokens); /v1/completions gives the same text; a short chat request;
-a streaming chat request; the same completion again (identical tokens) and
-/health afterwards. Chat requests switch thinking off (Qwen3.5 would otherwise
+a streaming chat request; the same completion again (identical tokens); a chat
+request with float sampling settings; an Anthropic /v1/messages request with a
+system message inside messages; /apply-template with a float in a tool schema;
+optionally --soak N short completions in a row; and /health afterwards. Chat requests switch thinking off (Qwen3.5 would otherwise
 spend the 32 tokens reasoning; Granite's template ignores the switch). Writes check.json to test-results/ps5/api-check/<time>/.
 Only reads from the server, apart from optional --shutdown, which ends the
 title's serving window (POST /ps5lm/shutdown).
@@ -159,6 +161,7 @@ def main():
     ap.add_argument('--shutdown', action='store_true', help='POST /ps5lm/shutdown at the end')
     ap.add_argument('--out', default=None)
     ap.add_argument('--model-run', default=None, help='model-mode run directory (test-results/ps5/PPSA99041/<time>)')
+    ap.add_argument('--soak', type=int, default=0, help='N short completions in a row at the end (0: none)')
     args = ap.parse_args()
     if not args.host:
         raise SystemExit('set PS5_HOST or pass --host')
@@ -226,6 +229,58 @@ def main():
                   done=done, text=text)
     result['completions'] = runs
     check('second_completion_identical', runs[0]['tokens'] == runs[1]['tokens'])
+
+    # Floats in a request: the console's localeconv() once took the server down
+    # on "temperature": 0.7 (net-compat.c, ps5lm_localeconv). Sampled, so only
+    # the answer and the server's health afterwards are checked, not the text.
+    status, chat, _ = request(base, '/v1/chat/completions', {
+        'messages': [{'role': 'user', 'content': 'Name a fruit. One word.'}],
+        'max_tokens': 16, 'temperature': 0.7, 'top_p': 0.9, 'min_p': 0.05, 'repeat_penalty': 1.1,
+        'seed': 1, 'chat_template_kwargs': {'enable_thinking': False}})
+    content = (((chat or {}).get('choices') or [{}])[0].get('message') or {}).get('content') or ''
+    status_h, _, _ = request(base, '/health')
+    check('v1_chat_float_params', status == 200 and content.strip() and status_h == 200, content=content)
+
+    # Anthropic API with a system message inside messages, as Claude Code sends
+    # (patches/server/0004): templates such as Qwen's refuse it unless folded.
+    status, msg, _ = request(base, '/v1/messages', {
+        'model': 'ps5lm', 'max_tokens': 48, 'temperature': 0, 'system': 'You answer briefly.',
+        'messages': [{'role': 'user', 'content': 'Say hello.'},
+                     {'role': 'assistant', 'content': 'Hello.'},
+                     {'role': 'system', 'content': 'Answer in English.'},
+                     {'role': 'user', 'content': 'Name a color.'}]})
+    blocks = (msg or {}).get('content') or []
+    check('anthropic_messages_mid_system', status == 200 and (msg or {}).get('type') == 'message' and len(blocks) > 0,
+          blocks=[b.get('type') for b in blocks], stop_reason=(msg or {}).get('stop_reason'))
+
+    # tojson of a float in a chat template (patches/server/0005): recorded, not
+    # failed, since only templates that print tool schemas show it.
+    status, applied, _ = request(base, '/apply-template', {
+        'messages': [{'role': 'user', 'content': 'Weather?'}],
+        'tools': [{'type': 'function', 'function': {'name': 'weather', 'description': 'Weather',
+                   'parameters': {'type': 'object', 'properties': {'scale': {'type': 'number', 'default': 1.0}}}}}]})
+    prompt = (applied or {}).get('prompt') or ''
+    shown = '1.0' in prompt
+    check('apply_template_tools', status == 200, float_written_as_python=shown if 'scale' in prompt else None)
+
+    # Many requests in a row (upstream saw a decision model stop after ~55):
+    # one bounded series, every answer and its time recorded.
+    if args.soak:
+        times, failures = [], []
+        for i in range(args.soak):
+            try:
+                status, comp, wall = request(base, '/completion', {
+                    'prompt': v['prompt'], 'n_predict': 8, 'temperature': 0, 'cache_prompt': False}, timeout=60)
+                times.append(round(wall, 3))
+                if status != 200 or not (comp or {}).get('content'):
+                    failures.append({'request': i, 'status': status})
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                failures.append({'request': i, 'error': str(e)})
+                break
+        result['soak'] = {'requested': args.soak, 'completed': len(times), 'failures': failures, 'wall_s': times}
+        check('soak', not failures and len(times) == args.soak, completed=len(times), failures=failures[:3],
+              max_wall_s=max(times) if times else None,
+              median_wall_s=sorted(times)[len(times) // 2] if times else None)
     status, health, _ = request(base, '/health')
     check('health_after', status == 200, health=health)
     if args.shutdown:

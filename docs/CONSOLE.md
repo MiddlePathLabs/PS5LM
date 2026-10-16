@@ -579,6 +579,18 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
 | Qwen3-VL 4B Q4_K_M + F16 mmproj | 0.0082 | identical (47) | 231 ms | 397 ms | 114.8 / 113.2 tok/s | 4382 / 6144 MiB |
 | Qwen3-VL 8B Q4_K_M + F16 mmproj | 0.0056 | identical (47) | 291 ms | 624 ms | 78.7 / 79.2 tok/s | 6875 / 8192 MiB |
 
+
+- **2026-10-16, server-qwen with upstream v0.9.0's fixes** (eboot `bc8f8c3a…67fa`,
+  left deployed): this build has the patched RADV (freed buffers wait for the GPU), the
+  C-locale `localeconv`, and the Anthropic and tojson server patches
+  ([PORTING.md](PORTING.md#fixes-from-upstream-v090-2026-10-16)).
+  - **Result:** pass, exit 0, closed, PID 113; 127 responses, 0 errors.
+  - **api-check 13/13:** the `temperature: 0.7` request answered, the Anthropic request with a
+    mid-conversation system message answered, and the soak passed 100/100 (median 62 ms).
+  - **Speed and memory:** tg 252.2/250.5 tok/s, pp 3127/5255, within 1% of before. Peak
+    1409.6 MiB of 2048.
+  - **Evidence:** `…/PPSA99041/20261016-090943/`. All four services answered afterwards.
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

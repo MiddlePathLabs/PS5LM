@@ -40,7 +40,7 @@ model_files=(Qwen3.5-0.8B-Q4_K_M.gguf granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
     Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf Qwen3VL-4B-Instruct-Q4_K_M.gguf Qwen3VL-8B-Instruct-Q4_K_M.gguf)
 app="$work/PPSA99041"
 sdk="${PS5_NATIVE_SDK:-$upstream/.deps/native/ps5-payload-sdk}"
-archive="${RADV_ARCHIVE:-$root/build/radv-preflight/radv-release/src/amd/vulkan/libvulkan_radeon.a}"
+archive="${RADV_ARCHIVE:-$root/build/radv-preflight/radv-ps5lm/src/amd/vulkan/libvulkan_radeon.a}"
 cc="${PS5_CLANG:-$("${LLVM_CONFIG:?LLVM_CONFIG is required}" --bindir)/clang}"
 cxx="${CXX:-clang++}"
 llvm="$(dirname -- "$cc")"
@@ -69,7 +69,10 @@ commands = pathlib.Path(os.environ.get('RADV_COMPILE_COMMANDS', base.parents[3] 
 entry, = [e for e in json.loads(commands.read_text()) if e['file'].endswith('/src/amd/common/ac_gpu_info.c')]
 directory = pathlib.Path(entry['directory'])
 source = (directory / entry['file']).resolve()
-if source != root / '.deps/PS5_Mesa/src/amd/common/ac_gpu_info.c':
+# The pinned tree itself (radv-release) or its patched export (radv-ps5lm,
+# scripts/build-native-radv.sh); patches/mesa does not touch ac_gpu_info.c.
+if source not in (root / '.deps/PS5_Mesa/src/amd/common/ac_gpu_info.c',
+                  root / 'build/radv-preflight/mesa-source/src/amd/common/ac_gpu_info.c'):
     raise SystemExit('Diagnostic compile recipe is not from the pinned prepared Mesa tree')
 args = entry.get('arguments') or shlex.split(entry['command'])
 args = list(args)
@@ -200,7 +203,7 @@ fi
 if [ "$model_mode" = 1 ] || [ "$server" = 1 ]; then
     radv_link_flags+=(--defsym=posix_madvise=ps5lm_posix_madvise)
 fi
-net_compat=(getaddrinfo freeaddrinfo getnameinfo accept4 isatty getpwuid timegm readlink link symlink pathconf remove)
+net_compat=(getaddrinfo freeaddrinfo getnameinfo accept4 isatty getpwuid timegm readlink link symlink pathconf remove localeconv)
 if [ "$server" = 1 ]; then
     # ggml-server.cpp checks the one model load and the one context, and their caps.
     radv_link_flags+=(--wrap=llama_model_load_from_file --wrap=llama_init_from_model)

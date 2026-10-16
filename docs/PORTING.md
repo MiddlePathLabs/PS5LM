@@ -2148,6 +2148,63 @@ and 12.5 s (8B) of each launch. A `read(2)` patch like
 `patches/0003-ps5-model-file-reads.patch` for clip's tensor loop would cut
 that to about a second; proposed, not made.
 
+
+### Fixes from upstream v0.9.0 (2026-10-16)
+
+Upstream `cobanov/PS5LM` released v0.9.0 (`6323ecb`). It was reviewed, not merged, and four
+pieces were taken. The llama.cpp pin stays `552f18f`. Upstream moved to `04f7226` for MiniCPM-V
+and `/v1/systemone` decision models, which this work doesn't need.
+
+- **Floats in requests (`net-compat.c`, `ps5lm_localeconv`).** The console's `localeconv()`
+  reports an empty decimal point while its `strtod` reads `.`. nlohmann::json puts the reported
+  point into a number before `strtod`, so any request with a float in it (`"temperature": 0.7`
+  from an ordinary OpenAI client) failed an assertion and took the server down. Our API checks
+  only ever sent `temperature: 0`, an integer, so they never hit it. Server builds now bind
+  `localeconv` to a C-locale copy (`--defsym`, kept local like the other `net_compat` names),
+  and the title no longer imports libc's. From upstream `4f57e0e`.
+- **Freed GPU buffers (`patches/mesa/0001-radv-ps5-destroyed-buffer-waits-for-gpu.patch`).**
+  The PS5 winsys released a destroyed buffer's direct memory at once, so work already submitted
+  could reach unmapped memory, and a GPU fault on the PS5 hangs the console. The patch makes the
+  memory wait for the queue to pass the newest submission. It comes from PS5CEMU-HAR (GPL-3.0)
+  by way of upstream's `patches/mesa/0007`, unchanged.
+  - `scripts/build-native-radv.sh` now builds from an export of the pinned Mesa with
+    `patches/mesa` applied (`build/radv-preflight/mesa-source`, build dir `radv-ps5lm`), never
+    from `.deps/PS5_Mesa`. `provenance.json` lists the patches.
+  - `build-native-compute.sh` links that archive by default
+    (`885efdeb…8532`). The old `radv-release` archive stays on disk for comparison.
+  - Upstream's `0008`/`0009` (submit thread, wait spin) are not taken: upstream measured no gain.
+- **Anthropic API (`patches/server/0004-anthropic-system-messages.patch`).** Later system
+  messages are folded into the leading one, so templates such as Qwen's accept Claude Code's
+  `/v1/messages` requests. From upstream, unchanged.
+- **Chat-template floats (`patches/server/0005-jinja-tojson-floats-as-python.patch`).** `tojson`
+  writes floats as Python's `json.dumps` does (`1.0`, not `1`). From upstream, unchanged.
+
+`scripts/ps5-api-check.py` gained four checks:
+
+- a chat request with float sampling settings, followed by `/health`
+- `/v1/messages` with a system message inside `messages`
+- `/apply-template` with a float in a tool schema
+- `--soak N`: N short completions in a row (upstream saw a decision model stop after ~55)
+
+**Checks.**
+
+- **Host rehearsal (CPU, Qwen3.5 0.8B):** 14/14 checks, soak 30/30.
+- **Console run (`server-qwen`):** eboot `bc8f8c3a…67fa` linked the patched RADV, with 320
+  imports and no `localeconv` import. Result: PASS, exit 0, closed:true, PID 113, 127 responses,
+  0 errors.
+  - api-check 13/13: completions identical to the model mode's GPU tokens; the float request
+    answered and `/health` stayed ok; the Anthropic request answered; the template wrote `1.0`;
+    soak 100/100, 62 ms median, 67 ms max.
+  - Benchmark: pp 3127.4/5254.6, tg 252.2/250.5 tok/s at 128/512 prompt tokens. Run 10 before
+    these changes measured 3156.5/5271.2 and 253.5/251.3, so within 1%.
+  - Memory: peak 1409.6 MiB of 2048 (1407 before), Vulkan live after free 0, so the deferred
+    frees didn't raise the peak.
+  - Evidence: `test-results/ps5/PPSA99041/20261016-090943/`, `api-check/20261016-091003/`,
+    `api-bench/20261016-091017/`.
+
+**Not yet rerun with the patched driver:** the other build modes (MoE, vision). Their earlier
+passes used the unpatched `radv-release` archive, and their next builds link the patched one.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).
