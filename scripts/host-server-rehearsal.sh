@@ -12,6 +12,7 @@
 #   m-NAME: an entry of scripts/model-variants.sh, long-context entries NAME-cNk included)
 #   PS5LM_HOST_THREADS=8 ...                          more CPU threads (default 2, the title's)
 #   PS5LM_HOST_METAL=1 ...                            Metal instead of the CPU (a stand-in only)
+#   PS5LM_HOST_PORT=8082 ...                          another port (two rehearsals at once)
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 llama="$root/third_party/llama.cpp"
@@ -75,9 +76,10 @@ fi
 c++ -std=c++17 -O2 -Wall -Wextra -DPS5LM_HOST_REHEARSAL ${vflags[@]+"${vflags[@]}"} \
     -DPS5LM_HOST_MODEL_PATH="\"$model\"" -DPS5LM_SERVER_HOST='"127.0.0.1"' \
     -DPS5LM_SERVER_WINDOW_S="${window}u" -DPS5LM_MODEL_THREADS="$threads" \
+    -DPS5LM_SERVER_PORT="\"${PS5LM_HOST_PORT:-8081}\"" \
     -I "$work/source/ggml/include" -I "$work/source/include" -I "$work/source/common" -I "$work/source/tools/mtmd" \
     -I "$root/ps5/native-compute" "$root/ps5/native-compute/ggml-server.cpp" \
-    "${libs[@]}" "${frameworks[@]}" -o "$work/server-rehearsal-$variant"
-echo "Built $work/server-rehearsal-$variant"
+    "${libs[@]}" "${frameworks[@]}" -o "$work/server-rehearsal-$variant${PS5LM_HOST_PORT:+-$PS5LM_HOST_PORT}"
+echo "Built $work/server-rehearsal-$variant${PS5LM_HOST_PORT:+-$PS5LM_HOST_PORT}"
 [ "$action" = run ] || exit 0
-exec "$work/server-rehearsal-$variant"
+exec "$work/server-rehearsal-$variant${PS5LM_HOST_PORT:+-$PS5LM_HOST_PORT}"

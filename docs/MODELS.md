@@ -75,6 +75,11 @@ it ("at depth") and after a 128-token prompt ("at 0"). Chunk = prompt tokens per
 | Qwen3.5 9B Q4_K_M | 16k (16189) | F16 | 448 | 6776 / 7296 | yes / yes / yes | 0.49 / 1.9, identical | 428 | 61.6 / 67.6 | `PPSA99041/20261016-132613/`, `api-longctx/20261016-132850/` |
 | Qwen3.5 9B Q4_K_M | 32k (32575) | F16 | 256 | 7321 / 7808 | yes / yes / yes | – | 312 | 56.9 / 67.4 | `PPSA99041/20261016-133108/`, `api-longctx/20261016-133727/` |
 | Qwen3.5 9B Q4_K_M | 64k (65329) | F16 | 128 | 8418 / 9088 | yes / yes / yes | – | 278 | 48.9 / 67.4 | `PPSA99041/20261016-133933/`, `api-longctx/20261016-135305/` |
+| Llama 3.2 3B Q4_K_M | 4k (3887) | F16 | 512 | 2986 / 3328 | yes / yes / yes | 0.50 / 0.8, identical | 1221 | 122.8 / 139.1 | `PPSA99041/20261016-140516/`, `api-longctx/20261016-140553/` |
+| Llama 3.2 3B Q4_K_M | 8k (7991) | F16 | 448 | 3446 / 3968 | yes / yes / yes | 0.48 / 0.8, identical | 864 | 112.9 / 139.8 | `PPSA99041/20261016-141241/`, `api-longctx/20261016-141331/` |
+| Llama 3.2 3B Q4_K_M | 16k (16189) | F16 | 384 | 4362 / 4992 | yes / yes / yes | 0.18 / 0.8, identical | 532 | 91.7 / 138.9 | `PPSA99041/20261016-142606/`, `api-longctx/20261016-142806/` |
+| Llama 3.2 3B Q4_K_M | 32k (32566) | F16 | 192 | 6185 / 7040 | yes / yes / yes | – | 383 | 65.6 / 139.3 | `PPSA99041/20261016-143015/`, `api-longctx/20261016-143516/` |
+| Qwen3.8 27B UD-IQ2_XXS | 4k (3884) | F16 | 256 | 8336 / 8832 | yes / yes / yes | 1.72 / 5.8, identical | 183 | 30.2 / 31.0 | `PPSA99041/20261016-141000/`, `api-longctx/20261016-141159/` |
 
 ## Fits for sure (up to 6 GiB)
 

@@ -32,7 +32,7 @@ ps5lm_long_context() {
         llama32-3b-c4k)    set -- llama32-3b 4096 896 3328 600 512 ;;
         llama32-3b-c8k)    set -- llama32-3b 8192 1408 3968 600 512 ;;
         llama32-3b-c16k)   set -- llama32-3b 16384 2432 4992 900 512 ;;
-        llama32-3b-c32k)   set -- llama32-3b 32768 4480 7040 1200 512 ;;
+        llama32-3b-c32k)   set -- llama32-3b 32768 4480 7040 1200 256 ;;
         qwen38-27b-iq2xxs-c4k)  set -- qwen38-27b-iq2xxs 4096 1536 8832 900 256 ;;
         qwen38-27b-iq2xxs-c8k)  set -- qwen38-27b-iq2xxs 8192 1792 9088 900 256 ;;
         qwen38-27b-iq2xxs-c16k) set -- qwen38-27b-iq2xxs 16384 2432 9728 1200 256 ;;

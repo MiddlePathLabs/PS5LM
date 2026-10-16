@@ -644,6 +644,19 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   - Evidence: `…/PPSA99041/20261016-130106/`, `…/20261016-131403/`, `…/20261016-132613/`,
     `…/20261016-133108/`, `…/20261016-133933/`; `api-longctx/` and `api-check/` of the same times.
 
+- **2026-10-16, long context: Llama 3.2 3B Q4_K_M, 4k to 32k** (every layer keeps a KV cache,
+  112 KiB per token): four runs, all pass, exit 0, closed, 0 HTTP errors. Needles 3/3 at every
+  context; logit check 0.50 / 0.48 / 0.18 at 4k / 8k / 16k (tolerance 0.8), tokens identical.
+  Chunks 512 / 448 / 384 / 192 (lowered by the client from the half-length probe), longest graph
+  0.52 / 0.77 / 1.28 / 1.00 s, longest wait 0.10–0.24 s. Context +568 / 1024 / 1936 / 3760 MiB,
+  peak 2986 / 3446 / 4362 / 6185 MiB, all equal to the model within 2 MiB. Prompt 1221 → 383
+  tok/s, generation 122.8 → 65.6 tok/s from 4k to 32k (139 at depth 0). Evidence:
+  `…/PPSA99041/20261016-140516/`, `…/20261016-141241/`, `…/20261016-142606/`, `…/20261016-143015/`.
+- **2026-10-16, long context: Qwen3.8 27B UD-IQ2_XXS 4k** (chunk 256): pass, needles 3/3, logit
+  check 1.72 (tolerance 5.8, the low-bit model's Metal stand-in differs from the CPU by 1.9),
+  tokens identical; longest graph 1.457 s, wait 0.32 s; peak 8336 MiB; pp 183, tg 30.2 / 31.0.
+  `…/PPSA99041/20261016-141000/`.
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 

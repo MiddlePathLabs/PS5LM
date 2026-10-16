@@ -24,7 +24,9 @@
 #else
 #define PS5LM_SERVER_WORKLOAD "server-dense"
 #endif
+#ifndef PS5LM_SERVER_PORT /* the host rehearsal may use another (PS5LM_HOST_PORT) */
 #define PS5LM_SERVER_PORT "8081"
+#endif
 #ifndef PS5LM_SERVER_HOST
 #define PS5LM_SERVER_HOST "0.0.0.0" /* the console's one LAN interface; only while the window is open */
 #endif

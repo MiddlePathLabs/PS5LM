@@ -2667,6 +2667,50 @@ the server's timings; any request over 10 × the median of its kind is listed fo
   at chunk 128 (predicted 1.15: the cost per prompt token at depth is lower at small chunks),
   wait 0.199 s; pp 278 tok/s; context +2758 MiB (2751 expected), peak 8418 MiB. **The 9B's
   ladder is complete: 4k to 64k, F16 KV.**
+- **Llama 3.2 3B 4k** (written before the run): eboot `10a10513…bf07`, context cap 896, total
+  3328, window 600 s (watchdog 180 + 600 + 120 = 900 s, `-t 1020`), chunk 512. Timing: depth-0
+  chunk ~0.33 s; attention per token of depth ~2.6 × the 9B's (28 layers × 24 heads × 128 vs
+  8 × 16 × 256) → longest graph at 3.9k ~0.45 s. Metal stand-in 0.164 / 0.237 → **tolerance 0.8**.
+- **27B UD-IQ2_XXS 4k** (written before the run): eboot `0173cece…4942`, context cap 1536,
+  total 8832, window 900 s (watchdog 300 + 900 + 120 = 1320 s, `-t 1440`), chunk 256. Timing:
+  a 256-token chunk at depth 0 ~1.3 s (half the 512-token 2.6 s); attention per token of
+  depth ~3 × the 9B's (16 KV layers × 24 heads vs 8 × 16) → longest graph at 3.9k ~1.4 s.
+  **Logit tolerance for the 27B:** its Metal stand-in differs from the CPU far more than the
+  9B's (low-bit IQ2/IQ1 weights: the tail of the distribution moves): 1.54 (512-token prompt,
+  8 of the CPU's top 10 in Metal's) and 1.91 (needle at 50 %, only 7 of 10). The overlap
+  criterion therefore follows the stand-in too: at least (Metal's overlap − 1) of the CPU's
+  top 10; at 4k **tolerance 5.8, overlap ≥ 6**. Top-1 and the greedy-token rule are unchanged.
+  CPU reference at 4.2 tok/s on the Mac (950 s for the 3.9k prompt): the 8k one runs in the
+  background; at 16k Metal stands in for the CPU if the CPU run cannot finish (recorded so).
+  **Result:** pass (`…/20261016-141000/`): needles 3/3; logit check 1.86 / 1.72 (≤ 5.8),
+  overlap 7/10, tokens identical; longest graph 1.457 s at chunk 256 (1.323 at depth 0),
+  waits 0.32 s; context +1123 MiB (1124 expected), peak 8336 MiB. Cost per chunk token 5.17 ms
+  at depth 0, 5.69 at 3.9k (0.133 µs per token of depth, ~5 × the 9B's in the same range).
+- **Llama 3.2 3B 8k** (written before the run): eboot `80332746…abff`, context cap 1408, total
+  3968, window 600 s (`-t 1020`), chunk 512; the 4k rung's graph was 0.516 s (0.361 at depth 0).
+  Prediction with 1.5 × an assumed 5-fold steeper slope above 4k (as the 9B's): 1.67 s, so
+  the client is expected to lower the chunk to 448. Metal stand-in 0.164 / 0.235 → **tolerance
+  0.8**, overlap ≥ 8.
+  **Result:** pass (`…/20261016-141241/`): probe graph 0.521 s → predicted 1.68 → chunk 448;
+  needles 3/3; logit check 0.095 / 0.483 (≤ 0.8), tokens identical; longest graph 0.767 s,
+  wait 0.166 s; context +1024 MiB (1024 expected), peak 3446 MiB. Cost per chunk token 1.0 ms
+  at 3.9k, 1.71 at 8k: 0.177 µs per token of depth.
+- **Llama 3.2 3B 16k** (written before the run): eboot `20f14f15…37d6`, context cap 2432, total
+  4992, window 900 s (`-t 1320`), chunk 512 by default. Prediction: probe (8.1k, chunk 512)
+  ~0.88 s; + 1.5 × 0.177 µs × 512 per token of depth → 1.99 s at 16.2k, so the client should
+  lower the chunk to 384 (~1.2 s). Metal stand-in 0.164 / 0.253 → **tolerance 0.8**, overlap ≥ 8.
+  **Result:** pass (`…/20261016-142606/`): probe graph 0.884 s → predicted 1.99 → chunk 384;
+  needles 3/3; logit check 0.095 / 0.185 (≤ 0.8), tokens identical; longest graph 1.277 s, wait
+  0.242 s; context +1936 MiB (1936 expected), peak 4362 MiB. 3.33 ms per chunk token at 16.2k
+  (0.198 µs per token of depth from 8k).
+- **Llama 3.2 3B 32k** (written before the run): eboot `2812bbf4…8896`, context cap 4480, total
+  7040 (expected peak 6171; under 2 × the 16k rung's 4992), window 1200 s (`-t 1620`), **chunk
+  256** by default (at 512 the 16k probe itself would take ~1.7 s). Prediction: probe ~0.85 s;
+  + 1.5 × 0.198 µs × 256 per token of depth → 2.1 s at 32.6k → the client should lower the
+  chunk to 192 (~1.3 s). Last rung for this model by the brief.
+  **Result:** pass (`…/20261016-143015/`): probe graph 0.682 s → predicted 1.91 → chunk 192;
+  needles 3/3; longest graph 0.998 s, wait 0.186 s; context +3760 MiB (3760 expected), peak
+  6185 MiB. **Llama 3.2 3B's ladder is complete: 4k to 32k, F16 KV.**
 
 ## On the console
 

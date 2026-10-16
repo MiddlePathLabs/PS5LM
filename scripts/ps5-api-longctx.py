@@ -32,7 +32,7 @@ Logit check (tolerances in docs/PORTING.md "Long context", fixed before the cons
 top-1 equal (or the CPU's top two within 0.5), the largest |GPU - CPU| log-probability over
 the CPU's top 10 (matched by token id; at least 8 of them in the GPU's top 10), and the
 greedy continuation by the model mode's rule (first 8 identical, or the first difference
-where the CPU's top two are within 0.5).
+where the CPU's top two are within 0.5). --tolerance and --min-common set the numbers.
 
 Writes longctx.json and table.md to test-results/ps5/api-longctx/<time>/ (console) or the
 --reference-out file (host). Only reads from the server, apart from the prompt_batch and
@@ -280,6 +280,8 @@ def main():
     ap.add_argument('--slope-us', type=float, default=None,
                     help='graph seconds per token of depth (x1e-6) beyond half length, from the previous rungs')
     ap.add_argument('--tolerance', type=float, default=None, help='max |logprob diff| over the CPU top 10 (from PORTING.md)')
+    ap.add_argument('--min-common', type=int, default=8,
+                    help='of the CPU top 10, at least this many in the GPU top 10 (from PORTING.md)')
     ap.add_argument('--skip-probe', action='store_true')
     ap.add_argument('--prompts-only', action='store_true', help='host: write the prompts, send no completions')
     ap.add_argument('--only', default='', help='host: comma-separated requests to run (e.g. depth0_512,needle_50)')
@@ -461,7 +463,7 @@ def main():
                 lc[k] = logit_compare(reqs[k], ref['requests'][k])
                 if args.tolerance is not None:
                     c = lc[k]
-                    c['pass'] = ((c['top1_equal'] or c['cpu_top2_gap'] <= TIE_GAP) and c['common_of_10'] >= 8 and
+                    c['pass'] = ((c['top1_equal'] or c['cpu_top2_gap'] <= TIE_GAP) and c['common_of_10'] >= args.min_common and
                                  c['max_abs_logprob_diff_top10'] is not None and
                                  c['max_abs_logprob_diff_top10'] <= args.tolerance and c['rule'] != 'fail')
                 print(f'logit check {k}: {json.dumps(lc[k])}', flush=True)
