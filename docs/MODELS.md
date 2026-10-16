@@ -46,6 +46,10 @@ ours. Evidence under `test-results/ps5/`.
 | Qwen3.5 0.8B | Q4_K_M 0.50 GiB | pass | 1.3 s | 1410 MiB | 3127 / 5255 | 252.2 | `PPSA99041/20261016-090943/`, `api-bench/20261016-091017/` | 207 tok/s (upstream v0.9.0, Slim) |
 | Qwen3.5 9B | Q4_K_M 5.29 GiB (`unsloth`) | pass (32/32 identical) | 4.6 s | 6277 MiB | 514 / 609 | 67.6 | `PPSA99041/20261016-094546/` (model), `20261016-100128/` (server), `api-bench/20261016-100138/` | 55 tok/s (upstream v0.9.0, Slim) |
 | Qwen3.8 27B | UD-IQ2_XXS 6.77 GiB (`unsloth`) | pass by the rule (20 identical, then a 0.15 tie) | 6.6 s | 8194 MiB | 178 / 200 | 31.0 | `PPSA99041/20261016-102525/` (model), `20261016-102708/` (server), `api-bench/20261016-102731/` | 20.7 tok/s at 64k context (abhi fork, Slim); upstream ~20 for UD-Q2_K_XL |
+| Llama 3.2 3B Instruct | Q4_K_M 1.88 GiB (`bartowski`) | pass (32/32 identical) | 2.3 s | 2751 MiB | 1152 / 1555 | 139.4 | `PPSA99041/20261016-103013/` (model), `20261016-103154/` (server), `api-bench/20261016-103210/` | 124 tok/s at 64k context (abhi fork, Slim 13.60) |
+| Mistral 7B Instruct v0.3 | Q4_0 3.83 GiB (`QuantFactory`, their file) | pass (32/32 identical, server only) | 3.4 s | 4492 MiB | 569 / 737 | 90.8 | `PPSA99041/20261016-110045/`, `api-bench/20261016-110107/` | 72.5 tok/s (ProsperoAI, base PS5 FW 6.02) |
+| MiniCPM5 2B | Q8_0 2.50 GiB (`openbmb`) | pass by the rule (20 identical, then a 0.31 tie; server only) | 2.6 s | 2938 MiB | 1408 / 2214 | 120.3 | `PPSA99041/20261016-110208/`, `api-bench/20261016-110223/` | 109.1 tok/s (ProsperoAI, base PS5) |
+| Granite 4.0 H-Tiny | Q4_K_M 3.94 GiB (`ibm-granite`) | pass (32/32 identical, server only) | 3.9 s | 4594 MiB | 1025 / 1901 | 141.4 | `PPSA99041/20261016-110300/`, `api-bench/20261016-110319/` | 105.0 tok/s (ProsperoAI, base PS5) |
 <!-- measured-rows -->
 
 ## Fits for sure (up to 6 GiB)

@@ -124,6 +124,18 @@ def model_run_tokens(run):
     return summary['tokens'], prompt['ids']
 
 
+def reference_prompt_ids(header):
+    """Without a model-mode run: the prompt ids the host CPU reference tokenized, from the
+    reference run whose model-reference.h is this header (scripts/build-host-model-reference.sh)."""
+    text = (ROOT / header).read_text()
+    for run in sorted((ROOT / 'test-results/local/model-reference').glob('*/'), reverse=True):
+        h = run / 'model-reference.h'
+        if h.exists() and h.read_text() == text:
+            out = (run / 'output.log').read_text(errors='replace')
+            return json.loads(re.findall(r'PS5LM_MODEL_PROMPT (\{.*\})', out)[-1])['ids'], str(run.relative_to(ROOT))
+    raise SystemExit(f'no reference run matches {header}')
+
+
 def reference(header):
     text = (ROOT / header).read_text()
     tokens = [int(x) for x in re.search(r'ps5lm_reference_tokens\[\d+\] = \{([^}]*)\}', text).group(1).split(',')]
@@ -184,9 +196,15 @@ def main():
     v = dict(VARIANTS[args.variant]) if args.variant in VARIANTS else measured_variant(args.variant)
     if args.model_run:
         v['model_run'] = args.model_run
-    if not v['model_run']:
+    if v['model_run']:
+        gpu_tokens, prompt_ids = model_run_tokens(v['model_run'])
+    elif args.variant.startswith('m-'):
+        # Measured models without a model-mode run (docs/PORTING.md "Measured models"): the
+        # completions must pass the model mode's rule against the CPU reference by themselves.
+        gpu_tokens = None
+        prompt_ids, v['model_run'] = reference_prompt_ids(v['reference'])
+    else:
         raise SystemExit('pass --model-run for this variant')
-    gpu_tokens, prompt_ids = model_run_tokens(v['model_run'])
     cpu_tokens, gaps = reference(v['reference'])
     out = pathlib.Path(args.out) if args.out else (
         ROOT / 'test-results/ps5/api-check' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))

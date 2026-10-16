@@ -2336,6 +2336,37 @@ ready 8.8 s; weights +7003 MiB, context +992, peak 8194 MiB of 9216. **The large
 total is now 9216 MiB.** The IQ1_S/IQ1_M shaders ran here for the first time without a
 visible problem (the tokens follow the CPU for 20 steps).
 
+#### Qwen3.8 27B UD-Q2_K_XL: new step 10624 MiB (written before its first load)
+
+| File | Repo @ revision | Bytes | SHA-256 |
+|---|---|---|---|
+| `Qwen3.8-27B-UD-Q2_K_XL.gguf` | `unsloth/Qwen3.8-27B-GGUF` @ `4ca720788d1e01f1bff70c033e0d0028fd02e502` | 9,828,981,664 | `fd4730dd8aad070517978752b63d530aeb1740d2283cab9fa24f1e404032ddb0` |
+
+The file upstream measured (~20 tok/s at 64k context on a Slim). Same architecture as the
+IQ2_XXS; output Q4_K 682.0 MiB, `token_embd` Q2_K 397.9 MiB; mostly IQ3_XXS (2366 MiB),
+IQ2_S (1464), IQ3_S (1238), IQ2_XXS (877), Q4_K (766), Q2_K (670), IQ2_XS (637), IQ4_XS (526).
+It carries one MTP layer (`blk.64.nextn.*`), which the pin ignores: the CPU loads 9028 MiB
+(`test-results/local/model-reference/20261016-101919/`). CPU text "The primary difference
+between a GPU and a CPU lies in their architecture and intended workload: a CPU (Central
+Processing Unit) is d…"; gaps 0.359 at token 0 and **0.099 at token 6** (near ties).
+
+**Step.** From 9216 MiB (passed) to **10624 MiB**: under 2 x 9216, and the device-memory
+rule's limit (RADV's ~11,674 MiB less 1 GiB = 10,650). This is the most a title may hold, so
+the margins are thin and stated: measured on the IQ2_XXS, the load adds the tensors + ~84 MiB
+and the server context is 992 MiB.
+
+| Part | Expected (model / server) | Cap | Margin |
+|---|---|---|---|
+| Before the load | ~90 / ~110 | in the total | |
+| Weights: GPU 8630 + `Vulkan_Host` 398 + transients | ~9112 | 9472 | ~360 |
+| Context (as the IQ2_XXS: 804 model, 992 server) | ~810 / ~1000 | 1088 | ~90 (server) |
+| **Total direct memory** | **~10.0 / ~10.2 GiB** | **10624** | ~400 (server) |
+
+Allocation caps 704 / 688 MiB, tensor-size check 704 MiB, for the 682 MiB output.
+Submissions 40,960; watchdog 480 s (`-t 600`), server load 300 s (`-t 1140`). If the model
+mode fails or its peak leaves under 256 MiB to the cap, the server run is skipped. Any
+failure, hang or unclosed title ends the step at 9216 MiB.
+
 #### Llama 3.2 3B Instruct Q4_K_M (written before its first load)
 
 | File | Repo @ revision | Bytes | SHA-256 |
@@ -2388,6 +2419,52 @@ SSM_SCAN/SSM_CONV and this MoE layout are new on this GPU).
 | Granite 4.0 H-Tiny | ~4160 (GPU 4032 + host 121) / 4608 | ~120 / ~550 / 1024 | 6144 | 256 / 240 |
 
 Watchdog 300 s (`-t 600`), server load 180 s (`-t 1020`).
+
+**Result, tier 2** (console runs 7–8 and 11–13). Choice made to save runs for the
+performance work: after Llama 3.2 3B (model mode and server, as for tier 1), the other three
+ran **server only**, with the model mode's pass rule applied by `ps5-api-check.py` to the
+API's token ids against the same CPU reference (`--variant m-NAME` without `--model-run`; the
+prompt ids come from the reference run). The server decodes the prompt in one 512 batch, the
+model mode in 32s, which is the only difference in what is checked.
+
+| Model | Rule vs CPU | Load / peak | pp 128 / 512 | tg 128 / 512 |
+|---|---|---|---|---|
+| Llama 3.2 3B | identical (model mode and API) | 2.3 s / 2751 MiB | 1152 / 1555 | 139.4 / 135.9 |
+| Mistral 7B v0.3 Q4_0 | identical | 3.4 s / 4492 MiB | 569 / 737 | 90.8 / 88.8 |
+| MiniCPM5 2B Q8_0 | prefix (20 identical, then a 0.306 gap) | 2.6 s / 2938 MiB | 1408 / 2214 | 120.3 / 119.5 |
+| Granite 4.0 H-Tiny | identical | 3.9 s / 4594 MiB | 1025 / 1901 | 141.4 / 135.2 |
+
+All passed api-check 14/14 with a 100-request soak and closed. Not run: Gemma 4 E4B QAT
+(its `per_layer_token_embd` is one 2205 MiB Q6_K tensor that ggml would place in
+`Vulkan_Host`: a 2.2 GiB single allocation, far over every cap so far; needs its own budget
+and allocation decision), Qwen3.8 9B Distill and BoHF 12B MoE (no runs left).
+
+### Performance: ProsperoAI's knobs (2026-10-16)
+
+`patches/ggml-vulkan/0008-native-dmmv-tuning-knobs.patch` reads ProsperoAI's mat-vec knobs at
+device creation from the title's fixed environment: `GGML_VK_PS5_RM_STDQ`, `_RM_KQ` (rows per
+workgroup for standard and K-quant mat-vec pipelines; IQ follows as 2 x RM_KQ) and
+`_DMMV_SUBGROUP` (the subgroup size those pipelines force), and logs one `PS5LM_VK_DMMV`
+line. A build sets them with `PS5LM_BUILD_DEFINES='-DPS5LM_VK_RM_KQ="4"'` (main.c adds the
+variable) and `PS5LM_BUILD_TAG` (its own build directory); unset, every build keeps ggml's
+defaults, which on this device are **rm_stdq 1, rm_kq 2, rm_iq 4, subgroup 64** (the device
+allows 32–64, with subgroup-size control; ggml-vk's architecture id 3). Server mode now
+prints the title's `PS5LM_VK_*` lines too (the log tap in `ggml-server.cpp`).
+
+Measured on `server-qwen` (Qwen3.5 0.8B Q4_K_M), one window each, against the window of
+`fad5ed4` (pp 3127.4/5254.6, tg 252.2/250.5 at 128/512 prompt tokens); tokens identical to
+the model mode's in both. Model uploads were running at the same time (disk only; the
+generation rate does not read the disk).
+
+| Setting | Prompt tok/s (128 / 512) | Generation tok/s (128 / 512) | Kept |
+|---|---|---|---|
+| baseline | 3127 / 5255 | 252.2 / 250.5 | |
+| `DMMV_SUBGROUP=32` (ProsperoAI's `ps5pro` profile) | 3138 / 5276 | 252.5 / 250.3 | no: no change |
+| `RM_KQ=4` | 3130 / 5255 | 250.6 / 243.7 | no: 0.6 % / 2.7 % slower |
+
+The large mat-vec workgroup (`DMMV_WG=1`, the other half of ProsperoAI's `ps5pro` profile)
+was measured slower before ("Performance: measured tuning"). `RM_STDQ` matters only for
+Q4_0/Q8_0 weights, which this model has none of; not run.
 
 ## On the console
 

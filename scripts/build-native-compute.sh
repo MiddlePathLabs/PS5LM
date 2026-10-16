@@ -47,6 +47,10 @@ model_files=(Qwen3.5-0.8B-Q4_K_M.gguf granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
     granite-3.1-3b-a800m-instruct-Q4_K_M.gguf OLMoE-1B-7B-0125-Instruct-Q4_K_M.gguf
     Qwen_Qwen3-30B-A3B-Instruct-2507-IQ2_M.gguf Qwen3VL-4B-Instruct-Q4_K_M.gguf Qwen3VL-8B-Instruct-Q4_K_M.gguf)
 case " ${model_files[*]} " in *" $want "*) ;; *) model_files+=("$want") ;; esac
+# Experiment builds (docs/PORTING.md "Performance: ProsperoAI's knobs"): PS5LM_BUILD_TAG
+# gives them their own directory, PS5LM_BUILD_DEFINES adds -D flags to the title's objects.
+if [ -n "${PS5LM_BUILD_TAG:-}" ]; then work="$work-$PS5LM_BUILD_TAG"; fi
+read -r -a build_defines <<< "${PS5LM_BUILD_DEFINES:-}"
 app="$work/PPSA99041"
 sdk="${PS5_NATIVE_SDK:-$upstream/.deps/native/ps5-payload-sdk}"
 archive="${RADV_ARCHIVE:-$root/build/radv-preflight/radv-ps5lm/src/amd/vulkan/libvulkan_radeon.a}"
@@ -118,7 +122,7 @@ glslangValidator -V --target-env vulkan1.0 --vn ps5lm_compute_spv \
     "$root/ps5/native-compute/compute.comp" -o "$work/gen/compute_spv.h"
 extra_objects=()
 extra_libraries=()
-compile_flags=()
+compile_flags=(${build_defines[@]+"${build_defines[@]}"})
 server=0
 case "$mode" in server*) server=1 ;; esac
 model_mode=0

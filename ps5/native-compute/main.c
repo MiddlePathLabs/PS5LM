@@ -464,6 +464,17 @@ static const struct { const char *name; char *value; } probe_environment[] = {
      * result; at 240 MiB it was rejected and the LM head went to Vulkan_Host.
      * 512 MiB accepts it; allocations stay capped by the line above. */
     {"GGML_VK_FORCE_MAX_BUFFER_SIZE", PS5LM_MODEL_VK_MAX_BUFFER}, /* "536870912" unless a model needs more */
+    /* ProsperoAI's mat-vec knobs (patch ggml-vulkan/0008), only in builds that set them
+     * (PS5LM_BUILD_DEFINES, docs/PORTING.md "Performance: ProsperoAI's knobs"). */
+#if defined(PS5LM_VK_RM_STDQ)
+    {"GGML_VK_PS5_RM_STDQ", PS5LM_VK_RM_STDQ},
+#endif
+#if defined(PS5LM_VK_RM_KQ)
+    {"GGML_VK_PS5_RM_KQ", PS5LM_VK_RM_KQ},
+#endif
+#if defined(PS5LM_VK_DMMV_SUBGROUP)
+    {"GGML_VK_PS5_DMMV_SUBGROUP", PS5LM_VK_DMMV_SUBGROUP},
+#endif
 #endif
 };
 

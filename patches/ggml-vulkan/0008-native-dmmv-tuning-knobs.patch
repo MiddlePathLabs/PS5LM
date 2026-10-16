@@ -1,0 +1,47 @@
+PS5 native title (__PROSPERO__) only: ProsperoAI's mat-vec tuning knobs. GGML_VK_PS5_RM_STDQ
+and GGML_VK_PS5_RM_KQ set the rows per workgroup for standard and K-quant mat-vec pipelines
+(IQ follows as 2 x RM_KQ), GGML_VK_PS5_DMMV_SUBGROUP the subgroup size the mat-vec pipelines
+force; read once at device creation from the title's fixed environment (main.c), so each
+setting is its own build. Unset, ggml's defaults. One PS5LM_VK_DMMV line logs the result.
+
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp	2026-10-16 10:37:32
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp	2026-10-16 10:37:47
+@@ -2932,6 +2932,20 @@
+     auto const &rm_int_n = [&](uint32_t rows, uint32_t i) { return (is_rdna3 && i >= 4) ? 4u : rows; };
+     // RDNA3: Static 4 rows for all types bench faster than the default
+     auto const &rm_id = [&](uint32_t rows) { return is_rdna3 ? 4u : rows; };
++#if defined(__PROSPERO__)
++    // PS5LM: ProsperoAI's mat-vec tuning knobs (GGML_VK_PS5_RM_STDQ, _RM_KQ: rows per
++    // workgroup; _DMMV_SUBGROUP below), read once here from the title's fixed environment.
++    // Unset: ggml's defaults. docs/PORTING.md "Performance: ProsperoAI's knobs".
++    auto const ps5_knob = [](const char * name, uint32_t lo, uint32_t hi) -> uint32_t {
++        const char * v = getenv(name);
++        if (v == nullptr || *v == '\0') return 0;
++        char * end = nullptr;
++        const unsigned long n = strtoul(v, &end, 10);
++        return (end != v && *end == '\0' && n >= lo && n <= hi) ? (uint32_t) n : 0;
++    };
++    if (uint32_t v = ps5_knob("GGML_VK_PS5_RM_STDQ", 1, 16)) rm_stdq = v;
++    if (uint32_t v = ps5_knob("GGML_VK_PS5_RM_KQ", 1, 16)) rm_kq = v;
++#endif
+     uint32_t rm_iq = 2 * rm_kq;
+ 
+     const bool use_subgroups = device->subgroup_arithmetic;
+@@ -2942,7 +2956,17 @@
+     // Ensure a subgroup size >= 16 is available
+     const bool use_subgroups16 = use_subgroups && subgroup_min_size_16 && !is_imagination_proprietary;
+ 
++#if defined(__PROSPERO__)
++    uint32_t subgroup_size = device->subgroup_size;
++    if (device->subgroup_size_control) {
++        if (uint32_t v = ps5_knob("GGML_VK_PS5_DMMV_SUBGROUP", device->subgroup_min_size, device->subgroup_max_size)) subgroup_size = v;
++    }
++    GGML_LOG_INFO("PS5LM_VK_DMMV {\"rm_stdq\":%u,\"rm_kq\":%u,\"rm_iq\":%u,\"subgroup\":%u,\"device_subgroup\":%u,\"min\":%u,\"max\":%u,\"control\":%d,\"arch\":%d}\n",
++                  rm_stdq, rm_kq, rm_iq, subgroup_size, device->subgroup_size, device->subgroup_min_size,
++                  device->subgroup_max_size, (int) device->subgroup_size_control, (int) device->architecture);
++#else
+     const uint32_t subgroup_size = (device->vendor_id == VK_VENDOR_ID_INTEL && device->subgroup_size_control && device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16) ? 16 : device->subgroup_size;
++#endif
+     const uint32_t subgroup_size16 = std::max(subgroup_size, 16u);
+ 
+     const uint32_t force_subgroup_size = use_subgroups ? subgroup_size : 0;

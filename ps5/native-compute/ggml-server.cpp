@@ -219,6 +219,9 @@ static std::atomic<int> offloaded{-1}, offload_total{-1}, splits_batch{-1}, spli
 {
     (void)data;
     if (level != GGML_LOG_LEVEL_CONT && text) {
+        // The title's own device lines (limits, mat-vec settings) reach the output file
+        // whatever the server's log verbosity, as in the model mode.
+        if (std::strncmp(text, "PS5LM_VK_", 9) == 0) { std::fputs(text, stdout); std::fflush(stdout); }
         int a = -1, b = -1;
         if (const char *at = std::strstr(text, "offloaded "))
             if (std::sscanf(at, "offloaded %d/%d", &a, &b) == 2) { offloaded.store(a); offload_total.store(b); }

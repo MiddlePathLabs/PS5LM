@@ -606,6 +606,12 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   `…/20261016-102525/`; server (eboot `e6eb65aa…7d83`) pass, 168 responses, tokens identical
   to the model mode, pp 178/200, tg 31.0/30.8, soak 100/100, peak 8194 MiB,
   `…/20261016-102708/`, `api-bench/20261016-102731/`.
+- **2026-10-16, tier-2 measured models** (all pass, closed, soak 100/100): Llama 3.2 3B
+  (model `…/20261016-103013/`, server `…/20261016-103154/`, tg 139.4), Mistral 7B Q4_0
+  (`…/20261016-110045/`, tg 90.8), MiniCPM5 2B Q8_0 (`…/20261016-110208/`, tg 120.3),
+  Granite 4.0 H-Tiny (`…/20261016-110300/`, tg 141.4).
+- **2026-10-16, ProsperoAI's knobs on server-qwen:** `DMMV_SUBGROUP=32` no change
+  (`…/20261016-104135/`), `RM_KQ=4` slightly slower (`…/20261016-104415/`); neither kept.
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.

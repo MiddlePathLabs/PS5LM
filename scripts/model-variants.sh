@@ -40,7 +40,7 @@ ps5lm_model_variant() {
             # Output Q4_K 682.0 MiB (one tensor), token_embd Q2_K 397.9 MiB (Vulkan_Host).
             # A new step (docs/PORTING.md "Measured models"): total 10624 MiB, the device-memory
             # rule's limit (1 GiB of RADV's ~11.4 GiB kept free).
-            prompt=$mv_prompt_qwen_nothink; weights=9600; context=1024; total=10624
+            prompt=$mv_prompt_qwen_nothink; weights=9472; context=1088; total=10624
             submit=40960; watchdog=480; load=300; alloc_mib=704; buffer=738197504 ;;
         llama32-3b)
             # The abhi fork's model (its README: Llama 3.2 3B Instruct Q4_K_M, 1.9 GiB; no repo named).
