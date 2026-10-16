@@ -101,6 +101,21 @@ Building stays a separate step. ShadowMountPlus has no launch call ([api.md](htt
 
 An agent may run it on an already-registered title, one run at a time (`AGENTS.md`). The risk does not change: a GPU hang can stop the console answering, and only a person can recover it. What changes is that nobody may be watching, so a hang, a title that does not close or `VK_ERROR_DEVICE_LOST` ends the session until the user is back. Registering new titles, ShadowMountPlus configuration and model loads stay with the user.
 
+## LAN API (server mode)
+
+`bash scripts/build-native-compute.sh server` (Granite 3.1 1B-A400M) or `… server-qwen` (Qwen3.5 0.8B) builds PPSA99041 with llama.cpp's server inside: OpenAI-compatible API on port 8081 for one bounded window (600 s, or until `POST /ps5lm/shutdown`), then it stops, frees, prints its result and closes itself ([PORTING.md](PORTING.md#lan-api-server-mode-lifetime-and-budget-2026-10-15-night)). `scripts/host-server-rehearsal.sh run 60` runs the same server code on the Mac (CPU, 127.0.0.1:8081) first.
+
+The test script waits for the title while you use the API, so start it in the background, one run at a time as always:
+
+```sh
+scripts/ps5-native-test.sh -d build/native-server/PPSA99041 -o native-server.out -t 960 PPSA99041 &
+scripts/ps5-api-check.py --variant moe          # waits for /health, then the correctness checks
+curl -X POST -H 'Content-Type: application/json' -d '{}' http://$PS5_HOST:8081/ps5lm/shutdown
+wait                                            # then read test-results/ps5/PPSA99041/latest/result.json
+```
+
+`-t 960` covers the title's 840 s watchdog. Without the shutdown request the window ends by itself after 600 s. The API is unauthenticated: it exists only while the window is open, and nothing restarts it.
+
 ## Common failures
 
 - **Exit 4, Payload Manager not answering:** the console is off, in rest mode, or was rebooted without the jailbreak. `ping` still answers in that state. Jailbreak again and start Payload Manager.

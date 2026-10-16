@@ -102,7 +102,7 @@ smaller fully resident MoE, not the earlier 27B/performance targets.
 
 **Done when** selected resident models produce correct output through the LAN API and repeatable local benchmarks are recorded.
 
-### Next on the GPU (2026-10-15; steps 0 and 1 done)
+### Next on the GPU (2026-10-15; steps 0, 1 and 2 done)
 
 Steps 0 and 1 are done; nothing for steps 2 and 3 has been run. Each step is one bounded
 `ps5-native-test.sh` run, read before the next, as the dense baseline was.
@@ -128,7 +128,15 @@ larger written budget (weights ~2.1 GiB with transients, so a total near
 fork reports ~5 GiB of GPU memory held after an in-app unload, so never unload
 and reload within a run.
 
-**2. LAN API.** Port upstream's `llama_server()` integration (`ps5/app/main.cpp`
+**2. LAN API: done (2026-10-15, night).** Build modes `server` and
+`server-qwen` run llama.cpp's server in PPSA99041 for a bounded window (600 s
+or `POST /ps5lm/shutdown`), then stop, free and close through the verified
+route. Through the API, Granite's temperature-0 completion is identical to the
+model mode's GPU tokens; chat, streaming and repeated requests work; an
+unchanged repeat launch matched. See PORTING.md "LAN API" and CONSOLE.md.
+The plan as it was written:
+
+Port upstream's `llama_server()` integration (`ps5/app/main.cpp`
 in `cobanov/PS5LM`) into a new build mode of PPSA99041, not its build: keep our
 native imports, close path, ledger, watchdog-free serving loop with an explicit
 `/quit` that calls `sceShellCoreUtilExitApp`, and the closed environment.

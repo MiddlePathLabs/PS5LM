@@ -11,7 +11,9 @@ case "$mode" in
     ggml-ops) work="$root/build/native-ggml-ops" ;;
     model) work="$root/build/native-model" ;;
     moe) work="$root/build/native-moe" ;;   # the model mode with the small MoE (PS5LM_MODEL_MOE)
-    *) echo "Usage: $0 [compute|ggml-ops|model|moe]" >&2; exit 2 ;;
+    server) work="$root/build/native-server" ;;            # llama.cpp's server, Granite MoE
+    server-qwen) work="$root/build/native-server-qwen" ;;  # llama.cpp's server, Qwen3.5 0.8B
+    *) echo "Usage: $0 [compute|ggml-ops|model|moe|server|server-qwen]" >&2; exit 2 ;;
 esac
 app="$work/PPSA99041"
 sdk="${PS5_NATIVE_SDK:-$upstream/.deps/native/ps5-payload-sdk}"
@@ -82,12 +84,19 @@ glslangValidator -V --target-env vulkan1.0 --vn ps5lm_compute_spv \
 extra_objects=()
 extra_libraries=()
 compile_flags=()
+server=0
+case "$mode" in server|server-qwen) server=1 ;; esac
 if [ "$mode" != compute ]; then
-    PS5_NATIVE_SDK="$sdk" RADV_ARCHIVE="$archive" bash "$root/scripts/build-native-llama.sh"
+    PS5LM_LLAMA_SERVER=$server PS5_NATIVE_SDK="$sdk" RADV_ARCHIVE="$archive" bash "$root/scripts/build-native-llama.sh"
     llama="$root/build/native-llama"
     compile_flags+=(-DPS5LM_GGML_OPS)
     runner=ggml-ops
-    if [ "$mode" = model ] || [ "$mode" = moe ]; then
+    if [ "$server" = 1 ]; then
+        # The model mode's runtime and caps, with llama.cpp's server as the workload.
+        compile_flags+=(-DPS5LM_GGML_MODEL -DPS5LM_GGML_SERVER)
+        [ "$mode" = server ] && compile_flags+=(-DPS5LM_MODEL_MOE)
+        runner=ggml-server
+    elif [ "$mode" = model ] || [ "$mode" = moe ]; then
         # The CPU reference comes first: scripts/build-host-model-reference.sh.
         [ -f "$work/gen/model-reference.h" ] || { echo "Missing $work/gen/model-reference.h" >&2; exit 2; }
         compile_flags+=(-DPS5LM_GGML_MODEL)
@@ -101,7 +110,18 @@ if [ "$mode" != compute ]; then
         -I "$root/ps5/native-compute" -I "$work/gen" \
         -c "$root/ps5/native-compute/$runner.cpp" -o "$work/obj/$runner.o"
     extra_objects+=("$work/obj/ggml-dispatch.o" "$work/obj/$runner.o")
-    extra_libraries+=(--start-group "$llama/cmake/src/libllama.a" "$llama/cmake/ggml/src/libggml.a"
+    if [ "$server" = 1 ]; then
+        # Only the libc and socket functions the server's link needs that no
+        # module a title may import provides (net-compat.c), kept local.
+        compile -std=c11 -c "$root/ps5/native-compute/net-compat.c" -o "$work/obj/net-compat.o"
+        extra_objects+=("$work/obj/net-compat.o")
+        server_libraries=("$llama/cmake/tools/server/libllama-server-impl.a"
+            "$llama/cmake/tools/server/libserver-context.a" "$llama/cmake/common/libllama-common.a"
+            "$llama/cmake/common/libllama-common-base.a" "$llama/cmake/tools/mtmd/libmtmd.a"
+            "$llama/cmake/tools/ui/libllama-ui.a" "$llama/cmake/vendor/cpp-httplib/libcpp-httplib.a"
+            "$llama/cmake/vendor/hash/libvendor-hash.a")
+    fi
+    extra_libraries+=(--start-group ${server_libraries[@]+"${server_libraries[@]}"} "$llama/cmake/src/libllama.a" "$llama/cmake/ggml/src/libggml.a"
         "$llama/cmake/ggml/src/libggml-cpu.a" "$llama/cmake/ggml/src/ggml-vulkan/libggml-vulkan.a"
         "$llama/cmake/ggml/src/libggml-base.a" --end-group)
 fi
@@ -129,8 +149,23 @@ if [ "$mode" != compute ]; then
         --defsym=vkCmdCopyBuffer=vk_common_CmdCopyBuffer
         --defsym=vkGetPhysicalDeviceFeatures2=vk_common_GetPhysicalDeviceFeatures2)
 fi
-if [ "$mode" = model ] || [ "$mode" = moe ]; then
+if [ "$mode" = model ] || [ "$mode" = moe ] || [ "$server" = 1 ]; then
     radv_link_flags+=(--defsym=posix_madvise=ps5lm_posix_madvise)
+fi
+net_compat=(getaddrinfo freeaddrinfo getnameinfo accept4 isatty getpwuid timegm readlink link symlink pathconf remove)
+if [ "$server" = 1 ]; then
+    # ggml-server.cpp checks the one model load and the one context, and their caps.
+    radv_link_flags+=(--wrap=llama_model_load_from_file --wrap=llama_init_from_model)
+    # The platform's resolver refuses every lookup; net-compat.c's numeric one
+    # replaces it, and binds the other names the server needs (all kept local).
+    kept=()
+    for flag in "${radv_link_flags[@]}"; do
+        case $flag in --defsym=getaddrinfo=*|--defsym=freeaddrinfo=*) ;; *) kept+=("$flag") ;; esac
+    done
+    radv_link_flags=("${kept[@]}")
+    for name in "${net_compat[@]}"; do
+        radv_link_flags+=("--defsym=$name=ps5lm_$name")
+    done
 fi
 # The PS5 target's nodllstorageclass policy overrides C visibility attributes.
 # Localize wrappers explicitly, just as the upstream recipe does its bindings.
@@ -138,8 +173,13 @@ vk_local=''
 if [ "$mode" != compute ]; then
     vk_local='vkGetInstanceProcAddr; vkGetDeviceProcAddr; vkCmdCopyBuffer; vkGetPhysicalDeviceFeatures2;'
 fi
-if [ "$mode" = model ] || [ "$mode" = moe ]; then
+if [ "$mode" = model ] || [ "$mode" = moe ] || [ "$server" = 1 ]; then
     vk_local="$vk_local posix_madvise;"
+fi
+if [ "$server" = 1 ]; then
+    for name in "${net_compat[@]}"; do
+        case $name in getaddrinfo|freeaddrinfo) ;; *) vk_local="$vk_local $name;" ;; esac
+    done
 fi
 printf '{ local: __wrap_*; mkstemp; ps5lm_mkstemp; %s ps5lm_*; };\n' "$vk_local" > "$work/probe-local.map"
 radv_link_flags+=(--version-script "$work/probe-local.map")
@@ -184,17 +224,21 @@ cp "$root/.deps/compiler-rt/compiler-rt-21.1.8.src/LICENSE.TXT" "$app/licenses/c
 if [ "$mode" != compute ]; then
     cp "$llama/source/LICENSE" "$app/licenses/llama.cpp-MIT.txt"
 fi
+if [ "$server" = 1 ]; then
+    cp "$llama/source/vendor/cpp-httplib/LICENSE" "$app/licenses/cpp-httplib-MIT.txt"
+    sed -n '1,8p' "$llama/source/vendor/nlohmann/json.hpp" > "$app/licenses/nlohmann-json-MIT.txt"
+fi
 "$tool" self --inspect --file "$app/eboot.bin" > "$work/eboot-integrity.txt"
 "$tool" self --inspect --file "$app/sce_module/libc.prx" > "$work/libc-integrity.txt"
 "$tool" self --extract --file "$app/eboot.bin" --out "$work/extracted.elf"
 "$tool" self --extract --file "$app/sce_module/libc.prx" --out "$work/libc-extracted.elf"
 bash "$upstream/tools/inspect.sh" "$work/eboot.elf" > "$work/native-structure.txt"
-if [ "$mode" = model ] || [ "$mode" = moe ]; then
+if [ "$mode" = model ] || [ "$mode" = moe ] || [ "$server" = 1 ]; then
     # Every object must name the same model: the title's setup check (main.c) and
     # the loader (ggml-model.cpp) once disagreed because a flag missed one of them.
     want=Qwen3.5-0.8B-Q4_K_M.gguf; other=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf
-    [ "$mode" = moe ] && { want=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf; other=Qwen3.5-0.8B-Q4_K_M.gguf; }
-    for object in "$work/obj/main.o" "$work/obj/ggml-model.o"; do
+    case "$mode" in moe|server) want=granite-3.1-1b-a400m-instruct-Q4_K_M.gguf; other=Qwen3.5-0.8B-Q4_K_M.gguf ;; esac
+    for object in "$work/obj/main.o" "$work/obj/$runner.o"; do
         strings "$object" | grep -qF "$want" || { echo "$object does not name $want" >&2; exit 2; }
         if strings "$object" | grep -qF "$other"; then echo "$object names $other" >&2; exit 2; fi
     done

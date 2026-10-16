@@ -1190,6 +1190,104 @@ expert path (`MUL_MAT_ID`, Q4_K and Q6_K) agrees with the CPU at real shapes.
 Granite's graph-scheduler buffer is small (context +93 MiB in total), unlike
 `qwen35`'s 198 MiB.
 
+### LAN API: server mode, lifetime and budget (2026-10-15, night)
+
+Written before the first server run.
+
+**What runs.** Build modes `server` (Granite 3.1 1B-A400M) and `server-qwen`
+(Qwen3.5 0.8B) of PPSA99041 run llama.cpp's own server, `llama_server()` from
+`tools/server/server.cpp` at the same pin, on a 16 MiB-stack thread inside the
+title (`ps5/native-compute/ggml-server.cpp`). OpenAI-compatible
+`/v1/chat/completions`, `/v1/completions`, `/v1/models`, plus `/health`,
+`/completion`, `/tokenize` and `/props`, on port 8081. Everything else is the
+model mode: the same model file and size check, `main.c`'s ledger, write-path
+guards, closed environment, dispatch guard, watchdog and
+`sceShellCoreUtilExitApp` close.
+
+**Taken from upstream, selectively.** From `cobanov/PS5LM`: the idea of calling
+`llama_server()` in the title (`ps5/app/main.cpp`), and from its
+`compat_app.c` only what our link reported undefined (`ps5/native-compute/net-compat.c`:
+a numeric `getaddrinfo`/`freeaddrinfo`, numeric `getnameinfo`, `accept4`,
+`isatty`, `getpwuid`, `timegm`, `pathconf`, and refusing `readlink`, `link`,
+`symlink`, plus a refusing `remove`), each bound as `ps5lm_NAME` with a local
+version-script entry like `mkstemp`, never exported. The SDK's own
+`getaddrinfo` binding is dropped for this mode only: it refuses every lookup and
+cpp-httplib binds through it. From the `abhi245y/PS5LM` fork:
+`patches/server/0002-listener-survives-network-drops.patch` (unchanged). Not
+taken: the dashboard, model planner, `/data/homebrew`, `LoadExec`, etaHEN,
+the web UI (`--no-webui`, built with `LLAMA_BUILD_UI=OFF`,
+`LLAMA_USE_PREBUILT_UI=OFF`, no download at build time), subprocesses
+(`LLAMA_SUBPROCESS=OFF`), TLS. The validator still requires every import to come
+from the six declared modules; the server adds 35 (sockets from `libkernel`,
+a few libc functions), 321 in all.
+
+**Our patch.** `patches/server/0001-ps5lm-server-hooks.patch` (only under
+`__PROSPERO__`, or `PS5LM_SERVER_HOOKS` for the Mac rehearsal): every response
+through llama's `ex_wrapper` is counted by status, `POST /ps5lm/shutdown` asks
+the title to end the window, and the title is told once `shutdown_handler` is
+set (after the model loads), the first moment `llama_server_terminate()` works.
+
+**Lifetime, bounded.** The title's main thread owns it (`ggml-server.h`):
+the model must be loaded within 120 s; the server then serves for **600 s** or
+until `POST /ps5lm/shutdown`, whichever comes first; the main thread then calls
+`llama_server_terminate()`, which stops the HTTP listener and the server loop,
+frees the context and model, and returns; this must finish within 60 s. Missing
+either deadline closes the title through `ps5lm_ops_fatal` (the usual
+`PS5LM_COMPUTE_RESULT` with `success:false` and the close). The watchdog is
+120 + 600 + 60 + 60 = **840 s**, so `ps5-native-test.sh` gets `-t 960`. After
+the stop the title prints `PS5LM_SERVER_SUMMARY` (responses, errors, stop
+reason, load/ready/served times, weights/context/peak memory, Vulkan live after
+free) and one `PS5LM_COMPUTE_RESULT` line, whose server fields are
+`http_responses`, `http_errors`, `served_ms` and `stop_reason`. Success needs
+the server to return 0, a stop by window or request, at least one response, no
+response with status 400 or above and no untracked Vulkan free. The listener
+binds `0.0.0.0:8081` (the console has one LAN interface) only for that window:
+it is created after the title starts and closed before the result line. The
+API is unauthenticated, so it is never left running: no autoload, no restart.
+
+**Settings** (all passed explicitly and checked by link-time wraps of
+`llama_model_load_from_file` and `llama_init_from_model`, which also allow
+exactly one model load and one context per launch): `-np 1`, `-c 2048` (the
+512-token benchmark prompt plus 128 generated tokens fit with room; at most
+4096 was allowed), `-b 32 -ub 32` (the model mode's batches, so every submit
+stays as small as in the passed runs), `-t 2 -tb 2`, `-fa on`, F16 K and V,
+`--no-op-offload`, `--no-repack`, `-lm none` (no mmap), `-lzm off`, `-fit off`
+(no automatic resizing from the queried device memory), `--cache-ram 0` (the
+server's default keeps up to 8 GiB of prompt cache in host memory),
+`--ctx-checkpoints 0` (32 by default; each would copy Qwen's 19 MiB recurrent
+state), `--threads-http 4`, `--no-webui`. Queue submissions: 1,048,576 over the
+launch instead of the model mode's 8192 (about 13 per decoded token; still a
+hard cap, the window is the liveness rule).
+
+**Budget**, from the model-mode measurements; caps unchanged and enforced as in
+the model mode:
+
+| Part | Granite (server) | Qwen3.5 0.8B (server-qwen) | Cap | Enforced by |
+|---|---|---|---|---|
+| Before the load (driver, heaps, server thread stack, HTTP threads) | ~60 MiB | ~60 MiB | in the total | ledger |
+| Weights (what the load adds) | ~826 MiB | ~764 MiB | 1152 MiB | wrap of `llama_model_load_from_file`, else `model_weights_budget` |
+| Context (KV at 2048, compute, scheduler) | ~141 MiB (KV 96) | ~283 MiB (KV 24, recurrent 19, scheduler 198) | 384 MiB | wrap of `llama_init_from_model`, else `model_context_budget` |
+| Serving scratch (requests, sampler, logs) | < 64 MiB | < 64 MiB | in the total | ledger |
+| All Vulkan memory | ~920 MiB | ~800 MiB | 1536 MiB | dispatch guard |
+| **Total direct memory** | **~1.1 GiB** | **~1.2 GiB** | **1536 MiB** | ledger, per allocation |
+
+1536 MiB stays an eighth of the 12 GiB direct budget; no reason to change it.
+
+**Checked on the Mac first** (`scripts/host-server-rehearsal.sh`, same pin and
+patches, CPU backend, the same `ggml-server.cpp` with `PS5LM_HOST_REHEARSAL`):
+the arguments parse into exactly the checked settings, the API reproduces the
+CPU reference's 32 tokens (rule `identical`), chat, streaming and a second
+request work, and both stops (window and `/ps5lm/shutdown`) end in
+`PS5LM_SERVER_SUMMARY` with `pass:true`. That checks the runner, not the
+console.
+
+**Correctness rule through the API** (`scripts/ps5-api-check.py`): `/tokenize`
+of the model mode's prompt must give the model mode's prompt tokens; a
+temperature-0 `/completion` of 32 tokens must equal the model mode's GPU tokens
+or pass the model mode's rule against the CPU reference; `/v1/completions` must
+give the same text; then a chat request, a streaming chat request, the same
+completion again (identical tokens) and `/health`.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works; one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

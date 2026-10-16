@@ -26,7 +26,12 @@ static atomic_uint submissions;
  * Fence/semaphore waits stay at two seconds; idle waits stay refused. */
 #define LIMIT ((VkDeviceSize)PS5LM_MODEL_GPU_ALLOCATION_MIB << 20)
 #define ALIGNMENT_LIMIT 1048576u
+#if defined(PS5LM_GGML_SERVER)
+#include "ggml-server.h"
+#define SUBMIT_LIMIT PS5LM_SERVER_SUBMIT_LIMIT
+#else
 #define SUBMIT_LIMIT 8192u
+#endif
 #define SUBMIT_BATCH_LIMIT 16u
 #define COMMAND_LIMIT 64u
 #define GROUP_DIM_LIMIT 65535u

@@ -113,8 +113,9 @@ def nid(name):
 def main():
     work, sdk, archive, llvm, root = map(pathlib.Path, sys.argv[1:])
     app = work / 'PPSA99041'
-    moe = work.name == 'native-moe'
-    model = moe or work.name == 'native-model'
+    server = work.name in ('native-server', 'native-server-qwen')
+    moe = work.name in ('native-moe', 'native-server')
+    model = moe or server or work.name == 'native-model'
     ggml_ops = model or work.name == 'native-ggml-ops'
     source = Elf(work / 'llvm-pie.elf')
     native = Elf(work / 'eboot.elf')
@@ -208,6 +209,8 @@ def main():
                 'licenses/PS5-Vulkan-GPL-3.0.txt', 'licenses/PS5-Vulkan-notices.txt', 'licenses/compiler-rt.txt'}
     if ggml_ops:
         expected.add('licenses/llama.cpp-MIT.txt')
+    if server:
+        expected |= {'licenses/cpp-httplib-MIT.txt', 'licenses/nlohmann-json-MIT.txt'}
     if relative != expected:
         raise ValueError(f'Unexpected package files: {relative ^ expected}')
     (work / 'imports.json').write_text(json.dumps({'needed': needed, 'imports': imports}, indent=2) + '\n')
@@ -250,10 +253,12 @@ def main():
         'limits': 'See ps5/native-compute/main.c and docs/PORTING.md for physical allocation budget and fence/watchdog bounds; no hardware proof.',
         'closure_limit': 'SDK-stub and converted NID closure is checked locally; real module exports/permissions on Pro12.70 require hardware.',
     }
-    manifest['workload'] = ('model-moe-greedy' if moe else 'model-dense-greedy' if model else
+    manifest['workload'] = (('server-moe' if moe else 'server-dense') if server else
+                            'model-moe-greedy' if moe else 'model-dense-greedy' if model else
                             'ggml-attn-prefill-scoped-fp32' if ggml_ops else 'integer-dispatch')
     if ggml_ops:
-        manifest['build_command'] += ' moe' if moe else ' model' if model else ' ggml-ops'
+        manifest['build_command'] += ((' server' if moe else ' server-qwen') if server else
+                                      ' moe' if moe else ' model' if model else ' ggml-ops')
         manifest['llama'] = json.loads((root / 'build/native-llama/manifest.json').read_text())
         manifest['build_scripts']['build-native-llama.sh'] = digest(root / 'scripts/build-native-llama.sh')
         manifest['hardware_gate'] = 'Native capabilities/tiny compute gates passed separately; ggml operators require one monitored Play and independent lifecycle evidence.'
@@ -267,7 +272,8 @@ def main():
                              'file': 'Qwen3.5-0.8B-Q4_K_M.gguf', 'bytes': 532517120,
                              'sha256': 'bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517',
                              'console_path': '/data/PS5LM/models/Qwen3.5-0.8B-Q4_K_M.gguf'}
-        manifest['cpu_reference_header_sha256'] = digest(work / 'gen/model-reference.h')
+        if not server:  # the server mode is checked against the model mode's tokens from the Mac
+            manifest['cpu_reference_header_sha256'] = digest(work / 'gen/model-reference.h')
         manifest['build_scripts']['build-host-model-reference.sh'] = digest(root / 'scripts/build-host-model-reference.sh')
         manifest['hardware_gate'] = 'One monitored ps5-native-test.sh run; read result.json and confirm closed before the next.'
     (work / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

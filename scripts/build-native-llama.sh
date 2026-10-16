@@ -14,7 +14,7 @@ work="$root/build/native-llama"
 # Build a source export: never modify the llama.cpp dependency working tree.
 mkdir -p "$work/source"
 git -C "$llama" archive HEAD | tar -x -C "$work/source"
-for p in "$root"/patches/*.patch "$root"/patches/ggml-vulkan/*.patch; do
+for p in "$root"/patches/*.patch "$root"/patches/ggml-vulkan/*.patch "$root"/patches/server/*.patch; do
     [ -e "$p" ] || continue
     patch --silent -d "$work/source" -p1 < "$p"
 done
@@ -40,25 +40,38 @@ cmake -S "$work/source" -B "$work/cmake" -G Ninja \
     -DVulkan_GLSLC_EXECUTABLE="$(command -v glslc)" \
     -DSPIRV-Headers_DIR="$spirv/share/cmake/SPIRV-Headers" \
     -DLLAMA_BUILD_COMMIT=552f18f912a32ea86edf82e2b76431cb7131538d \
-    -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
-    -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF \
-    -DLLAMA_OPENSSL=OFF
-cmake --build "$work/cmake" --target llama ggml-vulkan ggml-cpu -j 4
+    -DLLAMA_BUILD_COMMON=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON \
+    -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_APP=OFF \
+    -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_SUBPROCESS=OFF \
+    -DLLAMA_OPENSSL=OFF -DCMAKE_SKIP_INSTALL_RULES=ON
+# The server libraries are configured always (one tree, so the model builds'
+# libraries do not change) but built only for the server mode: no web UI (no
+# npm, no download), no subprocesses, no TLS.
+targets=(llama ggml-vulkan ggml-cpu)
+if [ "${PS5LM_LLAMA_SERVER:-0}" = 1 ]; then
+    targets+=(llama-server-impl server-context llama-common llama-common-base mtmd llama-ui cpp-httplib vendor-hash)
+fi
+cmake --build "$work/cmake" --target "${targets[@]}" -j 4
 python3 - "$root" "$work" <<'PY'
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 root, work = map(pathlib.Path, sys.argv[1:])
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 libraries = [work / 'cmake/src/libllama.a', *sorted((work / 'cmake/ggml/src').rglob('libggml*.a'))]
+if os.environ.get('PS5LM_LLAMA_SERVER') == '1':  # the server mode's extra libraries
+    libraries += sorted(p for p in (work / 'cmake').rglob('*.a')
+                        if p.parent.name in ('server', 'common', 'ui', 'mtmd', 'cpp-httplib', 'hash'))
 shaders = sorted((work / 'cmake/ggml/src/ggml-vulkan/vulkan-shaders.spv').glob('*.spv'))
 if not shaders:
     raise SystemExit('No host-generated Vulkan shaders')
 manifest = {
     'llama_commit': '552f18f912a32ea86edf82e2b76431cb7131538d',
     'gpu_executed': False,
+    'server_libraries': os.environ.get('PS5LM_LLAMA_SERVER') == '1',
     'libraries': {str(p.relative_to(work)): sha(p) for p in libraries},
     'patches': {str(p.relative_to(root)): sha(p) for p in
                [*sorted((root / 'patches').glob('*.patch')),
-                *sorted((root / 'patches/ggml-vulkan').glob('*.patch'))]},
+                *sorted((root / 'patches/ggml-vulkan').glob('*.patch')),
+                *sorted((root / 'patches/server').glob('*.patch'))]},
     'shader_count': len(shaders),
     'shader_digest': hashlib.sha256(''.join(p.name + ':' + sha(p) + '\n' for p in shaders).encode()).hexdigest(),
 }

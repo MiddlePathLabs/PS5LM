@@ -32,7 +32,16 @@
 #include "compute_spv.h"
 #endif
 
-#if defined(PS5LM_GGML_MODEL)
+#if defined(PS5LM_GGML_SERVER)
+/* The server mode is the model mode (same model, caps, ledger, guards and
+ * close) running llama.cpp's server for a bounded window (ggml-server.cpp). */
+#include "ggml-model.h"
+#include "ggml-server.h"
+#define WORD_COUNT 1u
+#define OUTPUT_PATH "/data/PS5LM/tests/native-server.out"
+#define CACHE_PATH "/data/PS5LM/cache/native-server"
+#define WORKLOAD PS5LM_SERVER_WORKLOAD
+#elif defined(PS5LM_GGML_MODEL)
 /* The model mode shares the ggml-ops runtime; only its limits and files differ. */
 #include "ggml-model.h"
 #define WORD_COUNT PS5LM_MODEL_PREDICT
@@ -55,7 +64,12 @@
 #if defined(PS5LM_GGML_MODEL)
 /* The model's explicit budget (docs/PORTING.md), not the queried 12 GiB. */
 #define DIRECT_LIMIT ((uint64_t)PS5LM_MODEL_TOTAL_MIB * UINT64_C(1048576))
+#if defined(PS5LM_GGML_SERVER)
+/* Load + serving window + stop + margin (ggml-server.h), not unbounded. */
+#define WATCHDOG_TIMEOUT_NS ((uint64_t)PS5LM_SERVER_WATCHDOG_S * UINT64_C(1000000000))
+#else
 #define WATCHDOG_TIMEOUT_NS UINT64_C(300000000000)
+#endif
 #else
 #define DIRECT_LIMIT UINT64_C(134217728)
 #define WATCHDOG_TIMEOUT_NS UINT64_C(30000000000)
@@ -108,6 +122,20 @@ static uint64_t elapsed_ns(uint64_t before)
     return before && after >= before ? after - before : 0;
 }
 
+#if defined(PS5LM_GGML_SERVER)
+/* Atomics only (ggml-server.cpp): the watchdog's result may call these too. */
+unsigned ps5lm_server_responses(void);
+unsigned ps5lm_server_errors(void);
+unsigned long long ps5lm_server_served_ms(void);
+const char *ps5lm_server_stop_reason(void);
+#define SERVER_FORMAT "\"http_responses\":%u,\"http_errors\":%u,\"served_ms\":%llu,\"stop_reason\":\"%s\","
+#define SERVER_VALUES , ps5lm_server_responses(), ps5lm_server_errors(), ps5lm_server_served_ms(), \
+    ps5lm_server_stop_reason()
+#else
+#define SERVER_FORMAT
+#define SERVER_VALUES
+#endif
+
 static void emit_result(int rc, VkResult vk_rc, const char *stage)
 {
     char line[2048];
@@ -125,7 +153,7 @@ static void emit_result(int rc, VkResult vk_rc, const char *stage)
         "\"fence_timeout_ns\":%llu,\"watchdog_timeout_ns\":%llu,"
         "\"init_us\":%llu,\"compile_us\":%llu,\"submit_wait_us\":%llu,"
         "\"verify_us\":%llu,\"cleanup_us\":%llu,\"total_us\":%llu,"
-        "\"timing_zero_may_be_unfinished\":true,"
+        "\"timing_zero_may_be_unfinished\":true," SERVER_FORMAT
         "\"system_allocations_capped\":false,\"clean_exit_proven\":false}\n",
         rc == 0 ? "true" : "false", rc, (int)vk_rc, stage,
         atomic_load(&attempted) ? "true" : "false",
@@ -145,7 +173,7 @@ static void emit_result(int rc, VkResult vk_rc, const char *stage)
         (unsigned long long)(atomic_load(&submit_ns) / 1000),
         (unsigned long long)(atomic_load(&verify_ns) / 1000),
         (unsigned long long)(atomic_load(&cleanup_ns) / 1000),
-        (unsigned long long)(elapsed_ns(start) / 1000));
+        (unsigned long long)(elapsed_ns(start) / 1000) SERVER_VALUES);
     if (n > 0 && (size_t)n < sizeof(line))
         sceKernelDebugOutText(0, line);
     else

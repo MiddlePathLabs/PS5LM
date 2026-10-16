@@ -224,6 +224,27 @@ remain cautionary evidence, not a validated safe budget for the Pro.
   `test-results/ps5/PPSA99041/20261015-200238/`. The unchanged repeat (PID 170)
   gave identical tokens and memory, 161.2 tok/s:
   `test-results/ps5/PPSA99041/20261015-200310/`.
+- **LAN API: llama.cpp's server in the title** (build mode `server`, Granite
+  3.1 1B-A400M, eboot `2303fcb0…2eaf`; settings and budget in
+  [PORTING.md](PORTING.md#lan-api-server-mode-lifetime-and-budget-2026-10-15-night)).
+  Run 1 (PID 172) **passed**: model loaded in 8.5 s, listening on
+  `0.0.0.0:8081` 9.0 s after launch. Through the API
+  (`scripts/ps5-api-check.py`, 9/9): `/tokenize` gives the model mode's 22 prompt
+  tokens; a temperature-0 `/completion` of 32 tokens is **identical to the model
+  mode's GPU tokens** (so the same near tie at token 1 against the CPU);
+  `/v1/completions` gives the same text; a chat request, a streaming chat
+  request (27 chunks) and the same completion again (identical) all succeed and
+  `/health` stays `ok`. The window was ended with `POST /ps5lm/shutdown` after
+  17 s of serving; stop to freed 0.1 s; 23 responses, 0 errors; closed and
+  unmounted, port 8081 closed afterwards. Memory: load +846 MiB (cap 1152),
+  context +136 MiB at 2048 tokens (cap 384), wrapped direct memory peak
+  1084 MiB (cap 1536), Vulkan peak 920 MiB, Vulkan 0 after the server returned;
+  18,358 queue submissions (the model mode's 8192 cap would have stopped it).
+  `test-results/ps5/PPSA99041/20261015-203449/`,
+  `test-results/ps5/api-check/20261015-203452/`. Run 2 (PID 174), launched again
+  with nothing changed: identical tokens, memory and counts,
+  `…/PPSA99041/20261015-203625/`, `…/api-check/20261015-203628/`. Benchmarks
+  from the same windows: see "LAN API benchmarks" below.
 
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.

@@ -1,0 +1,71 @@
+PS5LM native title server mode (ps5/native-compute/ggml-server.cpp), __PROSPERO__ (or a
+host rehearsal with PS5LM_SERVER_HOOKS) only: count every API response for the title's result
+line, POST /ps5lm/shutdown to end the serving window early, and tell the title when llama_server_terminate() works.
+
+--- a/tools/server/server.cpp
++++ b/tools/server/server.cpp
+@@ -49,6 +49,17 @@
+ }
+ 
+ 
++#if defined(__PROSPERO__) || defined(PS5LM_SERVER_HOOKS)
++// PS5LM native title (ps5/native-compute/ggml-server.cpp): the title counts the
++// responses, owns the serving window and is told when shutdown can be called.
++extern "C" void ps5lm_server_response(int status);
++extern "C" void ps5lm_server_shutdown_request(void);
++extern "C" void ps5lm_server_ready(void);
++#define PS5LM_RESPONSE(status) ps5lm_server_response(status)
++#else
++#define PS5LM_RESPONSE(status) ((void) 0)
++#endif
++
+ // wrapper function that handles exceptions and logs errors
+ // this is to make sure handler_t never throws exceptions; instead, it returns an error response
+ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t func) {
+@@ -56,7 +67,9 @@
+         std::string message;
+         error_type error;
+         try {
+-            return func(req);
++            auto res = func(req);
++            PS5LM_RESPONSE(res ? res->status : 500);
++            return res;
+         } catch (const std::invalid_argument & e) {
+             // treat invalid_argument as invalid request (400)
+             error = ERROR_TYPE_INVALID_REQUEST;
+@@ -81,6 +94,7 @@
+             SRV_ERR("got another exception: %s | while handling exception: %s\n", e.what(), message.c_str());
+             res->data = "Internal Server Error";
+         }
++        PS5LM_RESPONSE(res->status);
+         return res;
+     };
+ }
+@@ -311,6 +325,17 @@
+     // Google Cloud Platform (Vertex AI) compat
+     ctx_http.register_gcp_compat();
+ 
++#if defined(__PROSPERO__) || defined(PS5LM_SERVER_HOOKS)
++    // Ends the title's serving window early. The title, not this handler, stops
++    // the server, once the model is loaded (ps5lm_server_ready below).
++    ctx_http.post("/ps5lm/shutdown", ex_wrapper([](const server_http_req &) {
++        ps5lm_server_shutdown_request();
++        auto res = std::make_unique<server_http_res>();
++        res->data = safe_json_to_str({{"shutdown", "requested"}});
++        return res;
++    }));
++#endif
++
+     // return 403 for disabled features
+     server_http_context::handler_t res_403 = [](const server_http_req &) {
+         auto res = std::make_unique<server_http_res>();
+@@ -489,6 +514,9 @@
+             // this will unblock start_loop()
+             ctx_server.terminate();
+         };
++#if defined(__PROSPERO__) || defined(PS5LM_SERVER_HOOKS)
++        ps5lm_server_ready(); // shutdown_handler is set: llama_server_terminate() now works
++#endif
+     }
+ 
+     // register signal handler if not running by CLI
