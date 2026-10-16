@@ -31,12 +31,25 @@
 #define PS5LM_VISION_TOL_TOKENS_BELOW 2
 #define PS5LM_MODEL_PREDICT 64u
 #if defined(PS5LM_MODEL_QWEN3VL8B)
-/* Qwen/Qwen3-VL-8B-Instruct-GGUF (pin in docs/PORTING.md "Vision"). */
+/* Qwen/Qwen3-VL-8B-Instruct-GGUF @ f982a07559d4a2f6c8744d840bf6fccab30eea96 */
 #define PS5LM_GGML_WORKLOAD "model-vl8b-greedy"
 #define PS5LM_MODEL_FILE "Qwen3VL-8B-Instruct-Q4_K_M.gguf"
-#define PS5LM_MODEL_BYTES 0ull /* set with the pin */
+#define PS5LM_MODEL_BYTES 5027784800ull
 #define PS5LM_MMPROJ_FILE "mmproj-Qwen3VL-8B-Instruct-F16.gguf"
-#define PS5LM_MMPROJ_BYTES 0ull /* set with the pin */
+#define PS5LM_MMPROJ_BYTES 1159029824ull
+/* A new step of the climb (docs/PORTING.md "Vision"): total 8192 MiB, from the
+ * largest passing 6144. Weights: GPU buffers 4455 (incl. the untied 486.9 MiB
+ * Q6_K output) + input embedding in Vulkan_Host 334 + transients. Mmproj:
+ * 1105 MiB of weights, the 27-layer encoder's compute at 196 tokens, read buffer. */
+#define PS5LM_MODEL_WEIGHTS_MIB 5376u
+#define PS5LM_VISION_MMPROJ_MIB 1408u
+#define PS5LM_MODEL_CONTEXT_MIB 1024u
+#define PS5LM_MODEL_TOTAL_MIB 8192u
+/* The output matrix is one 486.9 MiB tensor: ggml's allocations go up to
+ * 512 MiB, the dispatch guard's to 528 MiB. */
+#define PS5LM_MODEL_GPU_ALLOCATION_MIB 528u
+#define PS5LM_MODEL_VK_MAX_ALLOCATION "536870912"
+#define PS5LM_MODEL_SUBMIT_LIMIT 24576u
 #else
 /* Qwen/Qwen3-VL-4B-Instruct-GGUF @ 1cd86afb9a95c410a6038ab3b40d8b578c892266 */
 #define PS5LM_GGML_WORKLOAD "model-vl4b-greedy"
@@ -58,7 +71,9 @@
 #define PS5LM_MODEL_VK_MAX_ALLOCATION "335544320"
 #endif
 #define PS5LM_MMPROJ_PATH "/data/PS5LM/models/" PS5LM_MMPROJ_FILE
+#ifndef PS5LM_MODEL_SUBMIT_LIMIT
 #define PS5LM_MODEL_SUBMIT_LIMIT 16384u
+#endif
 #define PS5LM_MODEL_WATCHDOG_S 300u
 #define PS5LM_MODEL_SERVER_LOAD_S 180u
 #elif defined(PS5LM_MODEL_QWEN3MOE)

@@ -175,7 +175,10 @@ matmuls requested F32 accumulation (patch 0004), and the 47 generated
 tokens were identical to the CPU's with the right answer. See PORTING.md
 "Vision". Server mode done too: an OpenAI chat request with the image as a
 base64 data URL returns the model mode's exact tokens; image prompt 397 ms,
-113 tok/s generation (`scripts/ps5-api-vision.py`). Qwen3-VL 8B follows.
+113 tok/s generation (`scripts/ps5-api-vision.py`). Qwen3-VL 8B passed both
+modes in a new 8192 MiB step (encode 291 ms, 79 tok/s, peak 6875 MiB).
+Proposals: load the mmproj with `read(2)` (9–12.5 s of `fread` per launch
+now); a larger or multi-image cap only with a written budget.
 
 **Next proposals** (none started): (a) generation is now set by GPU time per
 dispatch (~5 µs, 621 dispatches per Qwen token): find the remaining unfused

@@ -2091,6 +2091,63 @@ right; image prompt 397 ms (encode + decode of 224 prompt tokens),
 generation 113 tok/s; text benchmark 913 / 1171 tok/s prompt, 116 / 112
 tok/s generation; context +466 MiB, mmproj +990 MiB, peak 4382 MiB of 6144.
 
+#### Qwen3-VL 8B: pin, new step 8192 MiB, budget (written before its first load)
+
+| File | Repo @ revision | Bytes | SHA-256 |
+|---|---|---|---|
+| `Qwen3VL-8B-Instruct-Q4_K_M.gguf` | `Qwen/Qwen3-VL-8B-Instruct-GGUF` @ `f982a07559d4a2f6c8744d840bf6fccab30eea96` | 5,027,784,800 | `67d1659bfe71b89d50b45a4ad1a9e5b997e5bb16ce5da66a6a6167abd569e9e2` |
+| `mmproj-Qwen3VL-8B-Instruct-F16.gguf` | same | 1,159,029,824 | `ca524100ebf825c9a870db1c580d03879e0da0ab2541697e2458e64891cf9d38` |
+
+SHA-256 equal to the Hub's LFS ids and the downloaded files. Text model: 36
+layers, hidden 4096, FFN 12288, 32 Q / 8 KV heads of 128, 3 deepstack layers
+(`n_embd_inp` 16384), **untied**: `output.weight` Q6_K 486.9 MiB (one
+tensor), `token_embd` Q4_K 333.8 MiB; 4789 MiB of tensors. Mmproj: 27-layer
+ViT, hidden 1152, deepstack after layers 8, 16, 24; 1105 MiB.
+
+**Allocation cap**: ggml 512 MiB (`GGML_VK_FORCE_MAX_ALLOCATION_SIZE`
+536,870,912), dispatch guard 528 MiB, for the 486.9 MiB output; the load-time
+probe (297 MiB) is under the 512 MiB `max_buffer_size`.
+
+**Step.** The largest passing total is 6144 MiB (OLMoE, and the 4B here);
+this step is **8192 MiB** (at most 2 x 6144 = 12,288 and under the
+device-memory rule's 10,649), leaving 3.4 GiB of RADV's ~11.4 GiB free at the
+cap. Any failure, hang or unclosed title ends it at 6144 MiB.
+
+| Part | Expected (model / server) | Cap | Enforced by |
+|---|---|---|---|
+| Before the load | ~90 / ~110 | in the total | ledger |
+| Text weights: GPU buffers 4455 (incl. output 487) + input embedding in `Vulkan_Host` 334 + transients | ~4830 | 5376 | as the 4B |
+| Mmproj: 1105 weights + encoder compute at 196 tokens (~40) + read buffer (40.5) | ~1180 | 1408 | as the 4B |
+| Context: KV 144 (model, 1024) / 288 (server, 2048) + compute + scheduler | ~230 / ~550 | 1024 | as the 4B |
+| Serving scratch | – / < 64 | in the total | ledger |
+| All Vulkan memory | ~6.0 / ~6.4 GiB | 7808 | dispatch guard |
+| **Total direct memory** | **~6.2 / ~6.7 GiB** | **8192** | ledger |
+
+Queue submissions in the model mode 24,576 (the 4B used 3339). Watchdog
+300 s (model, `-t 600`), server 900 s (`-t 1020`); loads expected ~5 s (text)
+and ~13 s (mmproj through `fread`). CPU reference
+(`test-results/local/vision-reference/vl8b-20261016-083850/`): "The image
+displays the word "HELLO" in bold black letters above a row of three colored
+shapes: a red circle, a blue square, and a green triangle. The word written
+in the image is "HELLO"." (47 tokens; smallest top-two gap 0.69 at token 19,
+none below 0.5). Metal stand-in (`…/vision-metal-smoke/vl8b-20261016-083916/`):
+relative L2 0.0058, cosine 0.99998, no token below 0.995, tokens identical.
+Tolerance and pass rule unchanged.
+
+**Result, 8B** (console runs 4 and 5): pass in both modes. Model mode:
+embedding relative L2 0.0056, cosine 0.999984, no token below 0.995; all 47
+tokens identical to the CPU's; weights +4826, mmproj +1312, context +228 MiB,
+peak 6458 MiB; encode 291 ms; 78.7 tok/s. Server: the API's tokens equal the
+model mode's; image prompt 624 ms, 79.2 tok/s; context +514 MiB, peak
+6875 MiB of 8192. **The largest passing total is now 8192 MiB.** The mmproj
+added 1312 MiB against a 1408 MiB cap (weights 1105 + ~207, as the 4B's
+~203 over its weights): keep that margin in mind for a larger encoder.
+Not done: clip loads the mmproj through `std::ifstream`, which is `fread`
+here (92.5 MB/s uncached, measured again by the storage probe): 9.0 s (4B)
+and 12.5 s (8B) of each launch. A `read(2)` patch like
+`patches/0003-ps5-model-file-reads.patch` for clip's tensor loop would cut
+that to about a second; proposed, not made.
+
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).

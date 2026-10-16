@@ -23,7 +23,10 @@ Vision (model mode, title clock; [PORTING.md](PORTING.md) "Vision"): Qwen3-VL
 embedding within 0.8 % (relative L2) of the CPU's, text identical to the CPU,
 114.8 tok/s generation. Through the API (server mode): one image request's
 prompt (encode + 224 tokens) in 397 ms, 113 tok/s generation; text 913 / 1171
-tok/s prompt (128 / 512 tokens), 116 / 112 tok/s generation.
+tok/s prompt (128 / 512 tokens), 116 / 112 tok/s generation. Qwen3-VL 8B
+Instruct Q4_K_M (4.68 GiB) + F16 mmproj (1.08 GiB) in an 8192 MiB budget:
+encode 291 ms, embedding within 0.6 % of the CPU's, text identical, 78.7 tok/s;
+through the API 624 ms image prompt, 79 tok/s, text 517 / 624 tok/s prompt.
 
 Qwen3-30B-A3B-Instruct-2507 IQ2_M (9.19 GiB, `qwen3moe`) loaded and ran fully
 resident in a 10560 MiB budget (peak 9723 MiB, 37 tok/s on the title's clock)

@@ -130,6 +130,12 @@ CLIMB = {
              'sha256': '66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a',
              'mmproj': {'file': 'mmproj-Qwen3VL-4B-Instruct-F16.gguf', 'bytes': 836180256,
                         'sha256': '256f3a43bd4205ffef48d6b92715e1e70b5b0e9aef06522584967513a9985331'}},
+    'vl8b': {'repo': 'Qwen/Qwen3-VL-8B-Instruct-GGUF',
+             'revision': 'f982a07559d4a2f6c8744d840bf6fccab30eea96',
+             'file': 'Qwen3VL-8B-Instruct-Q4_K_M.gguf', 'bytes': 5027784800,
+             'sha256': '67d1659bfe71b89d50b45a4ad1a9e5b997e5bb16ce5da66a6a6167abd569e9e2',
+             'mmproj': {'file': 'mmproj-Qwen3VL-8B-Instruct-F16.gguf', 'bytes': 1159029824,
+                        'sha256': 'ca524100ebf825c9a870db1c580d03879e0da0ab2541697e2458e64891cf9d38'}},
 }
 VISION = ('vl4b', 'vl8b')
 

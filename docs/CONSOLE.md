@@ -545,6 +545,33 @@ reboot, Kstuff Lite then ShadowMountPlus reloaded): the OLMoE model mode
   `…/PPSA99041/20261016-083436/`, `…/api-vision/20261016-083500/`,
   `…/api-bench/20261016-083512/`.
 
+- **Run 4, Qwen3-VL 8B model mode** (`vl8b`, eboot `bc9cae82…9004`, the new
+  8192 MiB step): **pass, exit 0, closed.** Embedding: relative L2 0.0056,
+  cosine 0.999984, max abs 0.054 (1.1 % of the largest reference value 5.03),
+  no token below 0.995 (lowest 0.99954); per slice 0.0095, 0.0028, 0.0043,
+  0.0062. Text: all 47 tokens identical to the CPU's, "The image displays the
+  word "HELLO" in bold black letters above a row of three colored shapes: a
+  red circle, a blue square, and a green triangle. The word written in the
+  image is "HELLO"." 37/37, 2 splits; encoder 1 split, 853 nodes. Memory:
+  text weights +4826 MiB (cap 5376), mmproj +1312 MiB (1408), context
+  +228 MiB (1024), direct peak 6458 MiB (8192), Vulkan peak 6097 MiB, 0 after
+  free. Load 4.6 s, mmproj 12.5 s, encode 291 ms, image decode 550 ms,
+  generation 78.7 tok/s. `…/PPSA99041/20261016-085419/`.
+- **Run 5, Qwen3-VL 8B server mode** (`server-vl8b`, eboot `9d63f6fb…e480`):
+  **pass, exit 0, closed**, 22 responses, 0 errors. Image request: 47 token
+  ids equal to the model mode's and the CPU's, answer HELLO; image prompt
+  623.5 ms median (615.6–628.4), generation 79.2 tok/s (78.8–80.2), wall
+  1.44 s. Text benchmark: prompt 516.5 / 623.9 tok/s, generation 79.8 / 78.5.
+  Memory: weights +4829 MiB, context +514 MiB, mmproj +1312 MiB, direct peak
+  6875 MiB (cap 8192), Vulkan peak 6383 MiB, 0 after free; ready 17.4 s after
+  launch. `…/PPSA99041/20261016-085508/`, `…/api-vision/20261016-085537/`,
+  `…/api-bench/20261016-085545/`.
+
+| Vision (one 448 x 448 image, 196 image tokens) | Embedding rel. L2 vs CPU | Tokens vs CPU | Encode (model mode) | Image prompt via API | Generation model / API | Peak / cap |
+|---|---|---|---|---|---|---|
+| Qwen3-VL 4B Q4_K_M + F16 mmproj | 0.0082 | identical (47) | 231 ms | 397 ms | 114.8 / 113.2 tok/s | 4382 / 6144 MiB |
+| Qwen3-VL 8B Q4_K_M + F16 mmproj | 0.0056 | identical (47) | 291 ms | 624 ms | 78.7 / 79.2 tok/s | 6875 / 8192 MiB |
+
 The remaining sections describe the earlier Slim. Payload numbers came from
 `probes/memprobe` and `probes/threadprobe`, run through shsrv.
 
