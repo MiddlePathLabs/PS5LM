@@ -155,7 +155,8 @@ quarantined, `ps5-eval-window.sh` now forbids it).
 
 **Recommendation.** Default model: **Qwen3.5 9B Q4_K_M**. Quality-oriented alternative:
 **Qwen3.8 27B UD-Q2_K_XL at 2K** (coding accuracy where the memory is affordable). Largest
-context with meaningful validation: **64K on the 9B** (needles 3/3, comprehension 8/9,
-bounded waits; GPU-vs-CPU logits validated to 16K on the ladder plus this session's
-recorded depth log-probabilities — see EVAL-NUMERICAL.md).
+context with meaningful validation: **64K on the 9B** — needles 3/3 at 65.3K, comprehension
+8/9, bounded waits, and token-exact CPU agreement at 50 %/90 % depth (see
+EVAL-NUMERICAL.md; the 27B is token-exact to 16K and log-prob-tolerant but not
+token-exact at 32K/90 %).
 

@@ -2803,6 +2803,28 @@ reference for exact prompt-ID equality. Mac CPU speed: 9B ≈ 36 tok/s prompt (3
 tolerances per rung as before: tolerance = 3 × the Metal–CPU max top-10 log-probability
 difference, rounded up to 0.1; overlap ≥ Metal's overlap − 1 (27B) or 8 (9B).
 
+
+#### Evaluation windows, as run (2026-10-16 evening)
+
+Eight console windows, one per row; every one exit 0, `closed: true`, 0 request errors,
+Vulkan freed. Evidence: the listed `test-results/ps5/PPSA99041/<id>/` plus the
+bench output directory. The eboots are the `-q` entries above.
+
+| window | entry | eboot | result | evidence |
+|---|---|---|---|---|
+| 2K quality, 9B | qwen35-9b-c2k-q | `914d2346…` | 44/48 (coding 12/12, reasoning 8/12), tg 67.5, peak 6267 | `PPSA99041/20261016-183504/`, `quality/20261016-184256/` |
+| 2K quality, 27B XXS | qwen38-27b-iq2xxs-c2k-q | `8d4055a8…` | 43/48 (coding 10/12), tg 31.1, peak 8159 | `PPSA99041/20261016-184837/`, `quality/20261016-185242/` |
+| 2K quality, 27B XL | qwen38-27b-q2kxl-c2k-q | — | 45/48 (coding 12/12), tg 29.9, peak 10268 | `PPSA99041/20261016-185255/`, `quality/20261016-185704/` |
+| 9B 16K comprehension | qwen35-9b-c16k-q | `9c6d9f0a…` | 9/9, pp 422 tg 60, peak 6771 | `PPSA99041/20261016-190157/`, `lc-comprehension/20261016-190808/` |
+| 27B 16K A+B | qwen38-27b-iq2xxs-c16k-q | — | gate 32/32 identical; needle_50 vs Metal identical 23 tok, 2.19 ≤ 4.9; 9/9; peak 9153 | `PPSA99041/20261016-191201/`, `api-longctx/20261016-191900/`, `lc-comprehension/20261016-193536/` |
+| 9B 32K A+B | qwen35-9b-c32k-q | — | needles 3/3, CPU-validated all depths (identical tokens, ≤ 1.57 ≤ 3.3); 8/9; peak 7325 | `PPSA99041/20261016-193701/`, `api-longctx/20261016-194203/`, `lc-comprehension/20261016-195401/` |
+| 9B 64K A+B | qwen35-9b-c64k-q | — | needles 3/3 at 65.3k, chunk 64; 8/9; pp 280 tg 48.8 | `PPSA99041/20261016-195421/`, `api-longctx/20261016-200751/`, `lc-comprehension/20261016-204303/` |
+| 27B 32K A+B | qwen38-27b-iq2xxs-c32k-q | `2f46f8c2…` | gate identical 32/32 (1.86 ≤ 4.9); needles 3/3, chunk 64; 8/9; peak 10237/10624 | `PPSA99041/20261016-204333/`, `api-longctx/20261016-205956/`, `lc-comprehension/20261016-214112/` |
+
+The 9B 64K GPU-vs-CPU and the 27B 32K GPU-vs-CPU logit comparisons were completed offline
+after the windows (the CPU references take hours); records in EVAL-NUMERICAL.md. The 9B
+server stall of the previous session did not recur (1269 requests, 0 errors, no request
+over 10× its median).
 ## On the console
 
 Runs: see [CONSOLE.md](CONSOLE.md). mmap of the model works in a payload (in a native title it wires the file into the system pool and starved the console: see "SSD streaming"); one block of 6 GiB is the ceiling; `std::thread::hardware_concurrency()` reports 16 while only 5 CPUs are allowed, hence the patch. Open: whether leaving through `_Exit` ends the `[SceLibc] A heap error is detected` message (#3).
