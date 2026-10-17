@@ -1,0 +1,310 @@
+{
+ "seed": 20261016,
+ "instructions": "Answer using only the documents above. Keep the answer short. Cite the document IDs (e.g. CFR-D-0107) that support it. End your reply with a line of the form \"Answer: <short answer>\". If the documents do not state the information, end with \"Answer: not enough information\".",
+ "critical_documents": {
+  "transformer-harlington": "CFR-D-0201 (2026 March 3): Substation upgrade record, Harlington. The auxiliary transformer T-3 at Harlington substation is rated 415 kVA, fed from the local distribution board DB-H2.",
+  "transformer-marshdean": "CFR-D-0233 (2026 March 25): Substation upgrade record, Marsh Dean. The auxiliary transformer T-1 at Marsh Dean substation is rated 630 kVA and feeds the signalling supply panel SP-M1.",
+  "transformer-osmund": "CFR-D-0287 (2026 April 18): Substation upgrade record, Osmund. The auxiliary transformer T-2 at Osmund substation is rated 290 kVA. Cooling is ONAN; the silencer was replaced in the same visit.",
+  "pump-rev-b": "CFR-D-0114 Rev B (2026 February 10): Pump commissioning sheet, Osmund depot. The MERIDIAN-7 booster pump discharge setpoint is 4.8 bar at nominal duty. Impeller trim 172 mm.",
+  "pump-rev-c": "CFR-D-0114 Rev C (2026 March 12): Pump commissioning sheet, Osmund depot. This revision supersedes Rev B after the dampener retrofit. The MERIDIAN-7 booster pump discharge setpoint is 4.2 bar at nominal duty. Impeller trim 172 mm unchanged.",
+  "pump-7b": "CFR-D-0119 (2026 March 2): Pump commissioning sheet, Wrenford depot. The MERIDIAN-7B booster pump (a later build of the same frame) discharge setpoint is 5.1 bar. It shares the 172 mm impeller trim.",
+  "interlock-ref": "CFR-T-0221 (2026 April 2): Brake design note. The brake interlock described here trips when the disc temperature exceeds the Class H limit stated for the Osmund incline in CFR-T-0189. Reset is manual.",
+  "class-h-limit": "CFR-T-0189 (2026 March 21): Thermal assessment, Osmund incline. The Class H limit for brake discs on the Osmund incline is 620 degrees Celsius. Above this the disc coating degrades.",
+  "siding-ashby": "CFR-L-0301 (2026 April 7): Siding capacity survey. Ashby Fold siding holds 14 wagons when loaded to the mark.",
+  "siding-pennock": "CFR-L-0318 (2026 April 9): Siding capacity survey. Pennock Ridge siding holds 9 wagons; the foul-check board is 3 m past the buffer stop.",
+  "siding-kestrel": "CFR-L-0342 (2026 April 14): Siding capacity survey. Kestrel Bay siding holds 17 wagons after the April extension.",
+  "toll-early": "CFR-A-0051 (2026 February 20): Tolling register. The Calver toll exemption code for programme vehicles is TOL-7749.",
+  "toll-late": "CFR-A-0093 (2026 April 27): Tolling register update. The Calver toll exemption code for programme vehicles is TOL-3316.",
+  "repeat-rating-1": "CFR-D-0356 (2026 May 6): Transformer load note. Under winter peak the Marsh Dean transformer T-1 was recorded at 71 % of rating.",
+  "repeat-rating-2": "CFR-D-0361 (2026 May 11): Transformer load note. Under summer peak the Marsh Dean transformer T-1 was recorded at 58 % of rating.",
+  "pump-distractor": "CFR-Q-0007 (2026 March 30): Quality audit trail. The audit checklist still cites the MERIDIAN-7 discharge setpoint of 4.8 bar from CFR-D-0114 Rev B, pending paperwork update."
+ },
+ "questions": [
+  {
+   "id": "sum-three-depths",
+   "documents": [
+    [
+     "transformer-harlington",
+     0.15
+    ],
+    [
+     "transformer-marshdean",
+     0.5
+    ],
+    [
+     "transformer-osmund",
+     0.85
+    ]
+   ],
+   "question": "What is the total rated capacity, in kVA, of the three auxiliary transformers at Harlington, Marsh Dean and Osmund substations?",
+   "reference": {
+    "answer": "1335 kVA",
+    "compute": "415 + 630 + 290",
+    "citations": [
+     "CFR-D-0201",
+     "CFR-D-0233",
+     "CFR-D-0287"
+    ]
+   },
+   "grader": {
+    "type": "numeric",
+    "value": 1335,
+    "unit": "kVA",
+    "tolerance": 0,
+    "forbid_values": [
+     1205,
+     1465
+    ]
+   }
+  },
+  {
+   "id": "revision-supersedes",
+   "documents": [
+    [
+     "pump-rev-b",
+     0.3
+    ],
+    [
+     "pump-rev-c",
+     0.6
+    ],
+    [
+     "pump-distractor",
+     0.62
+    ]
+   ],
+   "question": "According to the current revision of CFR-D-0114, what is the MERIDIAN-7 booster pump discharge setpoint?",
+   "reference": {
+    "answer": "4.2 bar (Rev C, 2026 March 12)",
+    "citations": [
+     "CFR-D-0114"
+    ]
+   },
+   "grader": {
+    "type": "numeric",
+    "value": 4.2,
+    "unit": "bar",
+    "tolerance": 0.0,
+    "forbid_values": [],
+    "require": [
+     "4.2"
+    ],
+    "disallow_answer": [
+     "4.8"
+    ]
+   }
+  },
+  {
+   "id": "cross-reference-2step",
+   "documents": [
+    [
+     "interlock-ref",
+     0.55
+    ],
+    [
+     "class-h-limit",
+     0.2
+    ]
+   ],
+   "question": "At what brake disc temperature does the interlock described in CFR-T-0221 trip?",
+   "reference": {
+    "answer": "620 degrees Celsius (the Class H limit from CFR-T-0189)",
+    "compute": "CFR-T-0221 points at CFR-T-0189, which states 620 C",
+    "citations": [
+     "CFR-T-0221",
+     "CFR-T-0189"
+    ]
+   },
+   "grader": {
+    "type": "numeric",
+    "value": 620,
+    "unit": "celsius",
+    "tolerance": 0,
+    "forbid_values": [],
+    "require": [
+     "620"
+    ]
+   }
+  },
+  {
+   "id": "synthesis-sidings",
+   "documents": [
+    [
+     "siding-ashby",
+     0.25
+    ],
+    [
+     "siding-pennock",
+     0.5
+    ],
+    [
+     "siding-kestrel",
+     0.75
+    ]
+   ],
+   "question": "How many wagons in total can the three sidings at Ashby Fold, Pennock Ridge and Kestrel Bay hold together? Cite the survey document for each siding.",
+   "reference": {
+    "answer": "40 wagons (14 + 9 + 17)",
+    "compute": "14 + 9 + 17",
+    "citations": [
+     "CFR-L-0301",
+     "CFR-L-0318",
+     "CFR-L-0342"
+    ]
+   },
+   "grader": {
+    "type": "numeric",
+    "value": 40,
+    "unit": "wagons",
+    "tolerance": 0,
+    "forbid_values": [
+     23,
+     31,
+     26
+    ],
+    "require_citations": true
+   }
+  },
+  {
+   "id": "refusal-warranty",
+   "documents": [
+    [
+     "pump-7b",
+     0.45
+    ],
+    [
+     "pump-rev-c",
+     0.46
+    ]
+   ],
+   "question": "What is the warranty period of the MERIDIAN-7 booster pump?",
+   "reference": {
+    "answer": "not enough information (no document states a warranty period)",
+    "citations": []
+   },
+   "grader": {
+    "type": "refusal"
+   }
+  },
+  {
+   "id": "near-identical-ids",
+   "documents": [
+    [
+     "pump-rev-c",
+     0.35
+    ],
+    [
+     "pump-7b",
+     0.4
+    ],
+    [
+     "pump-rev-b",
+     0.33
+    ]
+   ],
+   "question": "What is the discharge setpoint of the MERIDIAN-7B booster pump?",
+   "reference": {
+    "answer": "5.1 bar (CFR-D-0119)",
+    "citations": [
+     "CFR-D-0119"
+    ]
+   },
+   "grader": {
+    "type": "numeric",
+    "value": 5.1,
+    "unit": "bar",
+    "tolerance": 0.0,
+    "forbid_values": [],
+    "require": [
+     "5.1"
+    ],
+    "disallow_answer": [
+     "4.8"
+    ]
+   }
+  },
+  {
+   "id": "repeated-entity-values",
+   "documents": [
+    [
+     "repeat-rating-1",
+     0.3
+    ],
+    [
+     "repeat-rating-2",
+     0.7
+    ]
+   ],
+   "question": "What load, as a percentage of rating, was the Marsh Dean transformer T-1 recorded at under summer peak?",
+   "reference": {
+    "answer": "58 % (CFR-D-0361; the 71 % figure is the winter peak, CFR-D-0356)",
+    "citations": [
+     "CFR-D-0361"
+    ]
+   },
+   "grader": {
+    "type": "numeric",
+    "value": 58,
+    "unit": "percent",
+    "tolerance": 0,
+    "forbid_values": [],
+    "require": [
+     "58"
+    ],
+    "disallow_answer": [
+     "71"
+    ]
+   }
+  },
+  {
+   "id": "position-early",
+   "documents": [
+    [
+     "toll-early",
+     0.15
+    ]
+   ],
+   "question": "What is the Calver toll exemption code for programme vehicles?",
+   "reference": {
+    "answer": "TOL-7749 (CFR-A-0051)",
+    "citations": [
+     "CFR-A-0051"
+    ]
+   },
+   "grader": {
+    "type": "code",
+    "value": "TOL-7749",
+    "forbid": [
+     "TOL-3316"
+    ]
+   }
+  },
+  {
+   "id": "position-late",
+   "documents": [
+    [
+     "toll-late",
+     0.85
+    ]
+   ],
+   "question": "What is the Calver toll exemption code for programme vehicles?",
+   "reference": {
+    "answer": "TOL-3316 (CFR-A-0093)",
+    "citations": [
+     "CFR-A-0093"
+    ]
+   },
+   "grader": {
+    "type": "code",
+    "value": "TOL-3316",
+    "forbid": [
+     "TOL-7749"
+    ]
+   }
+  }
+ ],
+ "generator": {
+  "module": "scripts/ps5-lc-fixtures.py",
+  "note": "filler_document(random.Random(seed + 17), i) for i in range(n), critical docs inserted at round(depth * len(docs)); deterministic"
+ }
+}

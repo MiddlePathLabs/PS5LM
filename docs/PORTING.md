@@ -2711,6 +2711,97 @@ the server's timings; any request over 10 × the median of its kind is listed fo
   **Result:** pass (`…/20261016-143015/`): probe graph 0.682 s → predicted 1.91 → chunk 192;
   needles 3/3; longest graph 0.998 s, wait 0.186 s; context +3760 MiB (3760 expected), peak
   6185 MiB. **Llama 3.2 3B's ladder is complete: 4k to 32k, F16 KV.**
+- **27B UD-IQ2_XXS 8k** (written before the run): eboot `76dac0e2…7f25`, context cap 1792, total
+  9088, window 900 s (`-t 1440`), chunk 256 by default. Prediction: probe (3.9k, chunk 256)
+  ~1.46 s; with 1.5 × an assumed 4.7-fold steeper slope above 4k (as the 9B's: 0.62 µs per
+  chunk token per token of depth) → 2.44 s at 8k, so the client should lower the chunk to 128
+  (~1.05 s). CPU reference at 8k (3.1 tok/s on the Mac, 43 minutes): needle retrieved. Metal
+  stand-in 1.54 / 1.64, overlap 8 / 7 → **tolerance 4.9, overlap ≥ 6**.
+  **Result:** pass (`…/PPSA99041/20261016-145845/`, `…/api-longctx/20261016-150224/`):
+  probe graph 1.449 s → predicted 2.42 s → chunk 128; needles 3/3, 7 of the CPU top 10,
+  first-token max log-probability difference 1.46 ≤ 4.9, top-1 and continuation identical;
+  longest measured full-length graph 0.841 s and wait 0.188 s; context +1387 MiB (1388
+  expected), peak 8604 MiB of 9088; 166 prompt and 29.9 generation tok/s at depth. The
+  title reported success and closed.
+- **27B UD-IQ2_XXS 16k** (written before the run): context cap 2432, total 9728 MiB,
+  window 1200 s (`-t 1740`), chunk 128. From the 8k rung, a 128-token graph at depth 8k
+  was 0.841 s; extrapolating the measured 4k→8k slope with a 1.5 safety factor predicts
+  about 1.5 s at 16k. The half-length probe controls any further chunk reduction, and a
+  measured wait above 1.5 s or graph above 1.8 s stops long requests. The 16k Metal
+  stand-in retrieved the 50 % needle; it supplies the exact prompt IDs and first-token
+  distribution. A full CPU 16k completion is not yet recorded, so this rung compares
+  against Metal, explicitly as a stand-in. The short 512-token prompt must still pass the
+  8k CPU reference's token rule. Use tolerance **4.9** (3 × the 8k Metal–CPU difference
+  1.64, rounded up), overlap **≥ 6**, and require all three needles; report the Metal
+  comparison separately from CPU validation.
+  **Result:** pass (`…/PPSA99041/20261016-171044/`, `…/api-longctx/20261016-171740/`),
+  `closed: true`: the short prompt matched the 8k CPU reference's 32-token continuation
+  and top-1. The half-length graph was 0.838 s, predicting 1.485 s at full depth, so
+  chunk 128 was kept. All three needles were retrieved; the 50 % continuation matched
+  Metal, top-1 matched, top-10 overlap was 8 and first-token log-probability difference
+  2.19 ≤ 4.9. This is a Metal comparison at 16k, not a CPU long-prompt validation.
+  The longest full-length graph was 1.059 s, wait 0.242 s; context +1916 MiB (1916
+  expected), peak 9109 MiB of 9728; 149 prompt and 28.4 generation tok/s at depth.
+- **27B UD-IQ2_XXS 32k** (written before the run): context cap 3328, total 10624 MiB,
+  the device-memory rule's ceiling, window 1800 s (`-t 2340`), chunk **128** rather
+  than the variant's earlier 256 default. The 16k full-depth graph at chunk 128 was
+  1.059 s; a 1.5 × extrapolation of the 8k→16k marginal cost (~27 µs per token of
+  depth) predicts ~1.7 s at 32k. The half-length probe may reduce chunk to 64;
+  measured waits/graphs keep the same 1.5/1.8 s aborts. The host CPU reference
+  recorded exact 32k prompt IDs without completions. Before long requests, the
+  512-token prompt must pass against the 8k CPU reference. No long-prompt logit
+  comparison is claimed at this rung; require all three needles, bounded waits,
+  peak under the written caps, and clean closure. The 16k pass is the last good step.
+  **Result:** pass (`…/PPSA99041/20261016-171917/`, `…/api-longctx/20261016-173532/`),
+  `closed: true`: the short prompt matched the CPU reference's 32-token continuation
+  and top-1; all exact prompt IDs matched the host's 32k record; needles 3/3.
+  The half-length probe graph was 1.537 s (wait 0.241 s), predicted full 2.320 s,
+  so the client lowered chunk 128 → 64. Full-length graphs stayed ≤ 0.697 s and
+  waits ≤ 0.164 s. Context +2971 MiB (2972 expected), peak 10172 MiB of 10624,
+  452 MiB margin, no direct-memory denials or Vulkan errors; 119 prompt and 26.5
+  generation tok/s at depth. The 32k F16 ladder passes. Its measured context
+  is within 64 MiB of the model, so the documented 64k quantized-KV choice is
+  **q8_0** for a later run; that rung has not been attempted here.
+
+### Evaluation builds: quality and comprehension windows (2026-10-16 evening, written before the first run)
+
+The long-context evaluation (numerical validation at depth, comprehension fixtures, the 2K
+quality suites) reuses the validated rungs. New entries `NAME-cNk-q` in
+`scripts/model-variants.sh` keep **exactly the rung's validated caps** (context, total,
+weights, KV type F16, prompt chunk) and only extend the serving window, because one window
+must hold the longctx checks *and* the comprehension cases; the runner shuts the server down
+when done, so a window is a bound, not a duration. The 2K quality suites are new `c2k-q`
+entries: context 2048 with caps from the measured 2048 server runs.
+
+No memory number rises above an already-passed run of the same model; every cap below is
+copied from the passing rung or base entry (9B: rung caps from the ladder; 27B IQ2_XXS:
+rung caps; Q2_K_XL: its base entry's 10624 total). The stepped-climb rule is unaffected:
+these are runs of already-passed configurations.
+
+| Entry | ctx | context cap (MiB) | total cap (MiB) | measured at this ctx before | window (s) | chunk | runs in the window |
+|---|---|---|---|---|---|---|---|
+| qwen35-9b-c2k-q | 2048 | 1024 | 7680 | 643 ctx / 6277 peak | 1500 | 512 | 48-task quality suite |
+| qwen38-27b-iq2xxs-c2k-q | 2048 | 1280 | 9216 | 992 ctx / 8194 peak | 1800 | 256 | 48-task quality suite |
+| qwen38-27b-q2kxl-c2k-q | 2048 | 1280 | 10624 | 990 ctx / 10304 peak | 1800 | 256 | 48-task quality suite |
+| qwen35-9b-c16k-q | 16384 | 1536 | 7296 | rung 16k: 1121 ctx / 6776 peak | 2100 | 512 | longctx + comprehension |
+| qwen35-9b-c32k-q | 32768 | 2048 | 7808 | rung 32k: 1665 ctx / 7321 peak | 2700 | 256 | longctx --logits-all + comprehension |
+| qwen35-9b-c64k-q | 65536 | 3328 | 9088 | rung 64k: 2758 ctx / 8418 peak | 3600 | 128 | longctx --logits-all + comprehension |
+| qwen38-27b-iq2xxs-c16k-q | 16384 | 2432 | 9728 | rung 16k: 1916 ctx / 9109 peak | 2400 | 128 | longctx --logits-all + comprehension |
+| qwen38-27b-iq2xxs-c32k-q | 32768 | 3328 | 10624 | rung 32k: 2971 ctx / 10172 peak | 3900 | 128 | longctx --logits-all + comprehension |
+
+Window arithmetic (prefill throughput measured on the rungs): 9B 64k = longctx (probe +
+3 needles ≈ 820 s) + 8 comprehension cases ≈ 8 × 237 s ≈ 2720 s → 3600 with margin; 27B 32k
+= 965 s + 8 × 275 s ≈ 3165 s → 3900. `-t` = window + 540 + fetch. Abort rules are the
+longctx client's own (wait > 1.5 s, graph > 1.8 s) plus the runner's request timeout.
+
+**CPU references for the depth logit checks** (Phase A of the evaluation): needle
+completions with top-10 log-probabilities at 10 %, 50 % and 90 % of the rung length, from
+the host CPU rehearsal (8 threads, same pin and patches), reusing each existing prompts-only
+reference for exact prompt-ID equality. Mac CPU speed: 9B ≈ 36 tok/s prompt (32k needle ≈
+15 min, 64k ≈ 30 min), 27B IQ2_XXS ≈ 3.1 tok/s (32k needle ≈ 2.9 h). Metal stand-ins
+(host Metal rehearsal, ≈ 80 tok/s for the 27B, several hundred for the 9B) set the
+tolerances per rung as before: tolerance = 3 × the Metal–CPU max top-10 log-probability
+difference, rounded up to 0.1; overlap ≥ Metal's overlap − 1 (27B) or 8 (9B).
 
 ## On the console
 

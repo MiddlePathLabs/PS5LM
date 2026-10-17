@@ -41,6 +41,7 @@ reset_max knobs and the optional --shutdown.
 import argparse
 import datetime
 import json
+import math
 import os
 import pathlib
 import random
@@ -60,6 +61,8 @@ NEEDLES = {0.10: ('Halloway', 'AMBER-4821-FALCON'),
            0.90: ('Thornbury', 'JUNIPER-5174-ORCHID')}
 EOG_TEXT = ['<|im_end|>', '<|endoftext|>', '<|eot_id|>', '<|end_of_text|>', '<|eom_id|>']
 PREFIX, TIE_GAP = 8, 0.5
+
+REQ_TIMEOUT = 3600      # one request's HTTP timeout; the host CPU 27B needs hours per needle
 
 # ---- deterministic filler: invented places, people and numbers; no passcodes, vaults or secrets.
 PLACES = ['Marrowfield', 'Kestrel Bay', 'Old Tannery Lane', 'Upper Wexham', 'the Calder valley', 'Fenwick Cross',
@@ -177,7 +180,8 @@ def vk_max(stats):
     return {k: vk.get(k) for k in ('max_submit_ns', 'max_fence_wait_ns', 'max_semaphore_wait_ns', 'max_graph_ns')}
 
 
-def completion(base, title, prompt_ids, n_predict, n_probs=0, ignore_eos=False, timeout=3600):
+def completion(base, title, prompt_ids, n_predict, n_probs=0, ignore_eos=False, timeout=None):
+    timeout = timeout or REQ_TIMEOUT
     title.knob('reset_max', 1)
     before = title.stats()
     started = datetime.datetime.now().isoformat(timespec='seconds')
@@ -248,19 +252,29 @@ def logit_compare(gpu, cpu):
     common = [i for i in cpu_top if i in g0]
     diffs = [abs(g0[i] - lp) for i, lp in c0 if i in g0]
     cgaps = gaps_from_probs(cpu['probs'])
+    ggaps = gaps_from_probs(gpu['probs'])
     rule, first = token_rule(gpu['tokens'], cpu['tokens'], cgaps)
     top1_equal = gpu['probs'][0][0][0] == c0[0][0]
+    nonfinite = sum(1 for step in (gpu['probs'] + cpu['probs']) for _, lp in step if not math.isfinite(lp))
+    cvals = [lp for _, lp in c0]
+    spread = (max(cvals) - min(cvals)) if cvals else 0.0
     # Per position while the tokens agree: largest |diff| over the CPU's top 10.
     per_pos = []
+    rel_pos = []
     for gs, cs in zip(gpu['probs'], cpu['probs']):
         gd = dict(gs)
         d = [abs(gd[i] - lp) for i, lp in cs if i in gd]
         per_pos.append(round(max(d), 4) if d else None)
+        rel_pos.append(round(max(d) / spread, 4) if d and spread > 1e-9 else None)
         if gs[0][0] != cs[0][0]:
             break
-    return {'top1_equal': top1_equal, 'cpu_top2_gap': round(cgaps[0], 4), 'common_of_10': len(common),
+    return {'top1_equal': top1_equal, 'cpu_top2_gap': round(cgaps[0], 4), 'gpu_top2_gap': round(ggaps[0], 4),
+            'common_of_10': len(common), 'nonfinite_logprobs': nonfinite,
             'max_abs_logprob_diff_top10': round(max(diffs), 4) if diffs else None,
-            'rule': rule, 'first_diff': first, 'per_position_max_diff': per_pos}
+            'mean_abs_logprob_diff_top10': round(sum(diffs) / len(diffs), 4) if diffs else None,
+            'max_rel_logprob_diff_top10': round(max(diffs) / spread, 4) if diffs and spread > 1e-9 else None,
+            'rule': rule, 'first_diff': first, 'per_position_max_diff': per_pos,
+            'per_position_max_rel_diff': rel_pos}
 
 
 def main():
@@ -270,8 +284,11 @@ def main():
     ap.add_argument('--port', type=int, default=8081)
     ap.add_argument('--wait', type=int, default=360, help='seconds to wait for /health')
     ap.add_argument('--reference', help='host CPU reference JSON (written by --reference-out)')
+    ap.add_argument('--gate-reference', help='separate short-context CPU reference for --gate-depth0')
     ap.add_argument('--reference-out', help='write the host reference here (run against the rehearsal)')
     ap.add_argument('--logits', action='store_true', help='record top-10 log-probabilities on the 50%% needle')
+    ap.add_argument('--logits-all', action='store_true',
+                    help='record top-10 log-probabilities on all three needles (early/middle/late positions)')
     ap.add_argument('--wait-limit', type=float, default=1.0, help='seconds: predicted longest fence wait allowed')
     ap.add_argument('--wait-abort', type=float, default=1.5, help='seconds: a measured wait above this stops the long requests')
     ap.add_argument('--graph-limit', type=float, default=1.6, help='seconds: predicted longest graph (one prompt chunk) allowed')
@@ -282,17 +299,26 @@ def main():
     ap.add_argument('--tolerance', type=float, default=None, help='max |logprob diff| over the CPU top 10 (from PORTING.md)')
     ap.add_argument('--min-common', type=int, default=8,
                     help='of the CPU top 10, at least this many in the GPU top 10 (from PORTING.md)')
+    ap.add_argument('--gate-depth0', action='store_true',
+                    help='stop before any long request unless the 512-token prompt passes the token rule against '
+                         'the reference (a quantized KV cache is checked at a short context first)')
     ap.add_argument('--skip-probe', action='store_true')
     ap.add_argument('--prompts-only', action='store_true', help='host: write the prompts, send no completions')
     ap.add_argument('--only', default='', help='host: comma-separated requests to run (e.g. depth0_512,needle_50)')
+    ap.add_argument('--req-timeout', type=int, default=None,
+                    help='seconds per HTTP request (default 3600; the host CPU 27B needs more)')
     ap.add_argument('--shutdown', action='store_true')
     ap.add_argument('--out')
     args = ap.parse_args()
     if not args.host:
         raise SystemExit('set PS5_HOST or pass --host')
     base = f'http://{args.host}:{args.port}'
+    global REQ_TIMEOUT
+    if args.req_timeout:
+        REQ_TIMEOUT = args.req_timeout
     host_run = bool(args.reference_out)
     ref = json.loads(pathlib.Path(args.reference).read_text()) if args.reference else None
+    gate_ref = json.loads(pathlib.Path(args.gate_reference).read_text()) if args.gate_reference else ref
     template = variant_prompt(args.variant)
     result = {'variant': args.variant, 'started': datetime.datetime.now().isoformat(timespec='seconds'),
               'base': base if args.host in ('127.0.0.1', 'localhost') else 'http://<console>:%d' % args.port,
@@ -374,6 +400,17 @@ def main():
         reqs['depth0_512'] = completion(base, title, prompts['depth0_512'], 32, n_probs=10)
         show('depth 0 (512-token prompt, top-10)', reqs['depth0_512'])
         stop = guard('depth0_512')
+        if not stop and args.gate_depth0:
+            cpu = (gate_ref or {}).get('requests', {}).get('depth0_512')
+            if not cpu or not cpu.get('probs'):
+                stop = 'gate: no short-context reference'
+            else:
+                c = logit_compare(reqs['depth0_512'], cpu)
+                result['gate_depth0'] = c
+                note(f"short-context check: rule {c['rule']}, top-1 equal {c['top1_equal']}, "
+                     f"max diff {c['max_abs_logprob_diff_top10']}")
+                if c['rule'] == 'fail' or not (c['top1_equal'] or c['cpu_top2_gap'] <= TIE_GAP):
+                    stop = f"gate: the 512-token prompt fails the token rule ({c['rule']}, first diff {c['first_diff']})"
 
     # ---- 2. timing probe at half length
     if not stop and not args.skip_probe and want('probe_half') and 'depth0_512' in reqs:
@@ -416,10 +453,11 @@ def main():
             name = f'needle_{int(d * 100)}'
             if not want(name):
                 continue
+            probs_here = (d == 0.50 and args.logits) or args.logits_all
             if d == 0.90:
-                row = completion(base, title, prompts[name], 128, ignore_eos=True)
+                row = completion(base, title, prompts[name], 128, n_probs=10 if probs_here else 0, ignore_eos=True)
             else:
-                row = completion(base, title, prompts[name], 32, n_probs=10 if (d == 0.50 and args.logits) else 0)
+                row = completion(base, title, prompts[name], 32, n_probs=10 if probs_here else 0)
             reqs[name] = row
             show(f'needle at {int(d * 100)} %', row)
             toks = row['tokens']
@@ -458,7 +496,7 @@ def main():
     summary['prompt_batch_lowered'] = result.get('prompt_batch_lowered')
     if ref:
         lc = {}
-        for k in ('depth0_512', 'needle_50'):
+        for k in ('depth0_512', 'needle_10', 'needle_50', 'needle_90'):
             if k in reqs and reqs[k].get('probs') and ref['requests'].get(k, {}).get('probs'):
                 lc[k] = logit_compare(reqs[k], ref['requests'][k])
                 if args.tolerance is not None:

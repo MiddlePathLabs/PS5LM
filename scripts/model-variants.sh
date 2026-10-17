@@ -35,10 +35,21 @@ ps5lm_long_context() {
         llama32-3b-c32k)   set -- llama32-3b 32768 4480 7040 1200 256 ;;
         qwen38-27b-iq2xxs-c4k)  set -- qwen38-27b-iq2xxs 4096 1536 8832 900 256 ;;
         qwen38-27b-iq2xxs-c8k)  set -- qwen38-27b-iq2xxs 8192 1792 9088 900 256 ;;
-        qwen38-27b-iq2xxs-c16k) set -- qwen38-27b-iq2xxs 16384 2432 9728 1200 256 ;;
-        qwen38-27b-iq2xxs-c32k) set -- qwen38-27b-iq2xxs 32768 3328 10624 1800 256 ;;
+        qwen38-27b-iq2xxs-c16k) set -- qwen38-27b-iq2xxs 16384 2432 9728 1200 128 ;;
+        qwen38-27b-iq2xxs-c32k) set -- qwen38-27b-iq2xxs 32768 3328 10624 1800 128 ;;
         qwen38-27b-iq2xxs-c64k-kvq8) set -- qwen38-27b-iq2xxs 65536 3456 10624 2400 256; lc_kv=q8_0 ;;
         qwen38-27b-iq2xxs-c64k-kvq4) set -- qwen38-27b-iq2xxs 65536 2688 9984 2400 256; lc_kv=q4_0 ;;
+        # Evaluation windows (docs/PORTING.md "Evaluation builds"): the rung's validated caps
+        # with a longer serving window for the quality/comprehension suites; ctx 2048 for the
+        # 2K suites. The runner shuts the server down when done, so the window is only a bound.
+        qwen35-9b-c2k-q)          set -- qwen35-9b 2048 1024 7680 1500 512 ;;
+        qwen35-9b-c16k-q)         set -- qwen35-9b 16384 1536 7296 2100 512 ;;
+        qwen35-9b-c32k-q)         set -- qwen35-9b 32768 2048 7808 2700 256 ;;
+        qwen35-9b-c64k-q)         set -- qwen35-9b 65536 3328 9088 3600 128 ;;
+        qwen38-27b-iq2xxs-c2k-q)  set -- qwen38-27b-iq2xxs 2048 1280 9216 1800 256 ;;
+        qwen38-27b-iq2xxs-c16k-q) set -- qwen38-27b-iq2xxs 16384 2432 9728 2400 128 ;;
+        qwen38-27b-iq2xxs-c32k-q) set -- qwen38-27b-iq2xxs 32768 3328 10624 3900 128 ;;
+        qwen38-27b-q2kxl-c2k-q)   set -- qwen38-27b-q2kxl 2048 1280 10624 1800 256 ;;
         *) echo "Unknown long-context entry: $1" >&2; return 2 ;;
     esac
     lc_base=$1; lc_ctx=$2; lc_context=$3; lc_total=$4; lc_window=$5; lc_pbatch=$6
@@ -49,7 +60,7 @@ ps5lm_model_variant() {
     local alloc_mib='' buffer='' base=$1
     lc_ctx=''
     case "$name" in
-        *-c[0-9]*k|*-c[0-9]*k-kvq[48]) ps5lm_long_context "$name" || return 2; base=$lc_base ;;
+        *-c[0-9]*k*) ps5lm_long_context "$name" || return 2; base=$lc_base ;;
     esac
     case "$base" in
         qwen35-0.8b)

@@ -58,6 +58,25 @@ applied the same rule to the API's tokens (PORTING.md "Measured models"). Not ru
 E4B QAT (needs a 2.2 GiB single host allocation for its per-layer embedding table; a budget
 decision first), Qwen3.8 9B Distill and BoHF 12B MoE (no console runs left this session).
 
+
+## Quality evaluation (2026-10-16 evening)
+
+Beyond speed: a 48-task quality suite at 2K (coding with executed tests, reasoning,
+instruction following, structured output, grounded QA) and a 9-case long-context
+comprehension benchmark at 16K/32K/64K, deterministic graders only
+([EVAL-QUALITY.md](EVAL-QUALITY.md)). Numerical GPU-vs-CPU validation at depth:
+[EVAL-NUMERICAL.md](EVAL-NUMERICAL.md).
+
+| Model | 2K suite | 16K | 32K | 64K | tg at depth 32K / 64K |
+|---|---|---|---|---|---|
+| Qwen3.5 9B Q4_K_M | 44/48 | 9/9 | 8/9 | 8/9 | 56.9 / 48.8 tok/s |
+| Qwen3.8 27B UD-IQ2_XXS | 43/48 | 9/9 | 8/9 | — | 26.5 tok/s |
+| Qwen3.8 27B UD-Q2_K_XL | 45/48 | — | — | — | — |
+
+The three models are statistically tied at 2K; the 9B is 2.2x faster and reaches 64K.
+Default: the 9B; quality alternative for short-context coding: Q2_K_XL (at the
+device-memory ceiling). Full reasoning in EVAL-QUALITY.md section 6.
+
 ## Long context on this console
 
 Server mode, one build and one window per context ([PORTING.md](PORTING.md#long-context-2026-10-16)).
@@ -80,6 +99,9 @@ it ("at depth") and after a 128-token prompt ("at 0"). Chunk = prompt tokens per
 | Llama 3.2 3B Q4_K_M | 16k (16189) | F16 | 384 | 4362 / 4992 | yes / yes / yes | 0.18 / 0.8, identical | 532 | 91.7 / 138.9 | `PPSA99041/20261016-142606/`, `api-longctx/20261016-142806/` |
 | Llama 3.2 3B Q4_K_M | 32k (32566) | F16 | 192 | 6185 / 7040 | yes / yes / yes | – | 383 | 65.6 / 139.3 | `PPSA99041/20261016-143015/`, `api-longctx/20261016-143516/` |
 | Qwen3.8 27B UD-IQ2_XXS | 4k (3884) | F16 | 256 | 8336 / 8832 | yes / yes / yes | 1.72 / 5.8, identical | 183 | 30.2 / 31.0 | `PPSA99041/20261016-141000/`, `api-longctx/20261016-141159/` |
+| Qwen3.8 27B UD-IQ2_XXS | 8k (7993) | F16 | 128 | 8604 / 9088 | yes / yes / yes | 1.46 / 4.9, identical | 166 | 29.9 / 31.0 | `PPSA99041/20261016-145845/`, `api-longctx/20261016-150224/` |
+| Qwen3.8 27B UD-IQ2_XXS | 16k (16189) | F16 | 128 | 9109 / 9728 | yes / yes / yes | 2.19 / 4.9 vs Metal, identical; short CPU gate passed | 149 | 28.4 / 31.0 | `PPSA99041/20261016-171044/`, `api-longctx/20261016-171740/` |
+| Qwen3.8 27B UD-IQ2_XXS | 32k (32575) | F16 | 64 | 10172 / 10624 | yes / yes / yes | no long logit check; short CPU gate passed | 119 | 26.5 / 31.0 | `PPSA99041/20261016-171917/`, `api-longctx/20261016-173532/` |
 
 ## Fits for sure (up to 6 GiB)
 
